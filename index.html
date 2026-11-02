@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GP200 Librarian</title>
+  <link rel="stylesheet" href="src/ui/app.css">
+  <script type="module" src="src/ui/app.js"></script>
+</head>
+<body>
+  <!-- Redesign V1 ("amp room"): one header bar holds the name, the connection, the write promise and the pedal's own actions. -->
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <h1>GP200 Librarian</h1>
+      <span class="version" id="version"></span>
+    </div>
+    <div class="conn">
+      <span class="pill" id="conn-pill" data-state="off">Not connected</span>
+    </div>
+    <div class="head-right">
+      <!-- V2: the write notice is a button: on phones only its shield shows, and a tap opens the full notice (#guard-pop). -->
+      <button class="write-badge" id="btn-guard" type="button" aria-expanded="false" aria-controls="guard-pop" aria-label="Writes: how they are protected" title="Every outgoing message is checked by the write guard: uploads and preset changes are refused unless they belong to an operation you confirmed. On your GP-200, Copy, Move and Swap work on one patch at a time.">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>
+        <strong>WRITES: ONE PATCH AT A TIME</strong>
+        <span>previewed, backed up and verified</span>
+      </button>
+      <div class="guard-pop" id="guard-pop" role="note" hidden></div>
+      <div class="actions" data-region="pedal-actions">
+        <button id="btn-connect" class="primary">Connect</button>
+        <button id="btn-cancel" hidden>Stop reading</button>
+        <button id="btn-backup" disabled title="Saves everything as one .zip: the pedal's 256 patches (exact), your templates, the history and the settings. To back up only some patches, select them and use Back up selected.">Back up&hellip;</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="demo-banner" id="demo-banner" hidden>
+    <span class="demo-long">DEMO MODE: a simulated pedal with invented patches, not your GP-200.</span>
+    <span class="demo-short">DEMO MODE: simulated pedal, not your GP-200.</span>
+    <a href="./">Leave demo</a>
+  </div>
+
+  <nav class="place-tabs" id="place-tabs" aria-label="Places">
+    <div class="tabs" role="tablist">
+      <button id="tab-pedal" type="button" role="tab" aria-selected="true">Pedal</button>
+      <button id="tab-templates" type="button" role="tab" aria-selected="false">Templates</button>
+      <button id="tab-backups" type="button" role="tab" aria-selected="false">Backups</button>
+    </div>
+    <div class="nav-right">
+      <button id="btn-problem" type="button" class="problem small" hidden aria-label="Problem: see the message">&#9888;<span class="problem-text"> Problem</span></button>
+      <button id="btn-more" type="button" class="more" aria-haspopup="menu" aria-expanded="false">More &#9662;</button>
+    </div>
+  </nav>
+
+  <input type="file" id="open-backup-file" accept=".zip,.prst" hidden>
+  <input type="file" id="tpl-import-file" accept=".json,.zip,.prst" hidden>
+
+  <section class="progress-row" aria-live="polite">
+    <div class="progress" id="progress" hidden><div class="progress-fill" id="progress-fill"></div></div>
+    <div class="status-line">
+      <p class="status" id="status">Connect your GP-200 with USB, then click <b>Connect</b>. The first read starts automatically.</p>
+      <button id="btn-status-details" class="small" type="button" hidden title="Show the log, with the details of this problem">Details</button>
+    </div>
+  </section>
+
+  <section class="result" id="read-compare" data-region="read-compare" hidden>
+    <div class="result-head">
+      <strong id="read-compare-title"></strong>
+      <button id="btn-read-compare-save" class="small">Save report</button>
+      <button id="btn-read-compare-close" class="small" aria-label="Hide">Hide</button>
+    </div>
+    <!-- U-H3-2: the technical report is collapsed; the headline above says it in plain words. -->
+    <details class="report-details" id="read-compare-details"><summary>Details</summary><pre id="read-compare-text"></pre></details>
+  </section>
+
+  <!-- S3.1: operations that did not finish, found at start-up. Read only: nothing is resumed, undone or written. -->
+  <section class="result diff" id="recovery" data-region="recovery" hidden aria-live="polite">
+    <div class="result-head">
+      <strong id="recovery-title"></strong>
+      <button id="btn-recovery-check" class="small">Check and recover</button>
+      <button id="btn-recovery-close" class="small" aria-label="Hide">Hide</button>
+    </div>
+    <p id="recovery-note" class="recovery-note"></p>
+    <details class="report-details" id="recovery-details"><summary>Details</summary><pre id="recovery-text"></pre></details>
+  </section>
+
+  <!-- UI-4: Undo is a Pedal-tab action, shown only when there is something to undo (brief 3.6). -->
+  <section class="undo-bar" id="undo-bar" data-region="undo" hidden aria-live="polite">
+    <span id="undo-text" class="undo-text"></span>
+    <button id="btn-undo" disabled>Undo last copy</button>
+  </section>
+
+  <!-- S3.2 slice 4: single-level Undo of the most recent completed Copy/Move/Swap (patch or bank),
+       separate from the Test tools' Undo above. On the real pedal only after a one-patch Copy, Move or Swap
+       (0.6.0); shown only while there is one. -->
+  <section class="undo-bar" id="engine-undo-bar" data-region="engine-undo" hidden aria-live="polite">
+    <span id="engine-undo-text" class="undo-text"></span>
+    <button id="btn-engine-undo" disabled>Undo</button>
+  </section>
+
+  <!-- The result of a write (copy or Undo), on the Pedal tab whether or not the test tools are open. -->
+  <section class="result" id="write-result" data-region="write-result" hidden>
+    <div class="result-head">
+      <strong id="write-result-title"></strong>
+      <button id="btn-write-result-close" class="small" aria-label="Hide">Hide</button>
+    </div>
+    <details class="report-details" id="write-result-details"><summary>Details</summary><pre id="write-result-text"></pre></details>
+  </section>
+
+  <!-- UI-4: temporary development tool (brief section 4), opened from More ▾ on the Pedal tab only. -->
+  <section class="scratch" id="scratch" data-region="scratch" hidden aria-label="Test tools (bank 60)">
+    <div class="scratch-head">
+      <strong>Test tools (bank 60)</strong>
+      <span class="hint">A development tool for checking writes to the pedal. It will be replaced by the real Copy and Move.</span>
+      <button id="btn-scratch-close" class="small" type="button" aria-label="Close test tools">Close</button>
+    </div>
+    <section class="writebar" id="writebar" aria-label="Copy to scratch slot">
+      <strong class="writebar-title">Copy to scratch slot</strong>
+      <span id="copy-source" class="copy-source">Select one patch to copy</span>
+      <label>to <select id="sel-dest" aria-label="Scratch destination"></select></label>
+      <button id="btn-copy" class="write" disabled>Copy to scratch&hellip;</button>
+      <span class="hint">The Test tools write only to bank 60. Every copy is read back and verified. Undo appears above the banks.</span>
+    </section>
+  </section>
+
+  <section class="backups-empty" id="backups-empty" data-region="backups-empty" aria-label="Backups">
+    <h2>Backups</h2>
+    <p>Open a backup (.zip) or a single .prst file to look through it, compare it with your pedal, or save patches from it.
+      Read only: nothing is written to the pedal or to the file.</p>
+    <button id="btn-open-backup" class="primary" type="button">Open a backup or .prst file&hellip;</button>
+    <p class="hint">You can also drop a backup or .prst file onto this window.</p>
+    <button id="btn-compare-files" class="small" type="button">Compare two backup files&hellip;</button>
+  </section>
+  <section class="backup-banner" id="backup-banner" data-region="backup-banner"></section>
+
+  <section class="findbar" data-region="findbar" aria-label="Find">
+    <input type="search" id="search" placeholder="Find a patch or go to slot (e.g. 36-A)" aria-label="Find a patch or go to slot">
+    <span class="search-count" id="search-count"></span>
+    <button id="btn-match-prev" class="small" hidden title="Previous match (Shift+Enter)" aria-label="Previous match">&lsaquo;</button>
+    <button id="btn-match-next" class="small" hidden title="Next match (Enter)" aria-label="Next match">&rsaquo;</button>
+    <label class="only-matching" id="only-matching-wrap" hidden><input type="checkbox" id="chk-only-matching"> Matching banks only</label>
+    <button id="btn-goto" class="small" type="button" hidden></button>
+    <button id="btn-select-mode" class="small touch-only" aria-pressed="false" title="Select mode: each tap adds or removes a patch (for touch screens)">Select</button>
+    <span class="view-toggles">
+      <button id="btn-map" class="small" type="button" aria-pressed="true" aria-controls="bank-map" title="Show or hide the map of all 64 banks">Bank map</button>
+      <button id="btn-panel" class="small wide-panel-only" type="button" aria-pressed="true" aria-controls="summary" title="Keep the patch panel docked at the side, or hide it and open it over the banks when you click a patch">Patch panel</button>
+    </span>
+  </section>
+
+  <section class="selbar" id="selbar" data-region="selbar" hidden aria-live="polite">
+    <span class="selinfo" id="selinfo">Nothing selected</span>
+    <button id="btn-backup-sel" class="small" disabled>Back up selected</button>
+    <button id="btn-sel-copy" class="small" disabled>Copy to&hellip;</button>
+    <button id="btn-sel-move" class="small" disabled>Move to&hellip;</button>
+    <button id="btn-sel-swap" class="small" disabled>Swap with&hellip;</button>
+    <button id="btn-clear-sel" class="small" disabled>Clear</button>
+  </section>
+
+  <main class="lib" data-region="banks">
+    <nav class="bank-map" id="bank-map" aria-label="Bank map">
+      <p class="map-label">Banks</p>
+      <div class="map-grid" id="map-grid"></div>
+      <div class="map-key" aria-hidden="true"><span><i class="real"></i>Patch</span><span><i class="unused"></i>Unused</span><span><i class="sel"></i>Selected</span></div>
+    </nav>
+    <div class="lib-banks" id="lib-banks" role="grid" aria-label="Patches by bank" aria-multiselectable="true">
+      <div class="banks" id="banks-low"></div>
+      <div class="banks" id="banks-high"></div>
+    </div>
+    <aside class="summary" id="summary" aria-label="Patch summary">
+      <div class="sum-bar"><strong id="sum-title">Patch</strong><button id="btn-sum-close" class="small" type="button" aria-label="Close summary">Close</button></div>
+      <div id="summary-body"></div>
+    </aside>
+  </main>
+
+  <section class="templates-view" id="templates-view" data-region="templates-view" aria-label="Templates">
+    <div class="tpl-head">
+      <h2>Templates</h2>
+      <button id="btn-tpl-import" class="small" type="button">Import&hellip;</button>
+      <button id="btn-tpl-export-all" class="small" type="button">Export all&hellip;</button>
+    </div>
+    <p class="hint">Complete patches kept by the Librarian (in this browser), not on the pedal. Browser storage can be
+      cleared: export your templates. Back up&hellip; on the Pedal tab also includes them.</p>
+    <div class="tpl-body">
+      <div id="tpl-list" class="tpl-list"></div>
+      <div id="tpl-details" class="tpl-details"></div>
+    </div>
+  </section>
+  <section class="backup-sub" id="backup-templates" data-region="backup-templates" aria-label="Templates in this backup"></section>
+  <section class="backup-sub" id="backup-history" data-region="backup-history" aria-label="History in this backup"></section>
+
+  <details class="logbox" id="logbox" hidden>
+    <summary>Log <span id="log-count"></span></summary>
+    <div class="log-actions">
+      <label><input type="checkbox" id="chk-debug"> Debug (record every MIDI message)</label>
+      <button id="btn-save-log" class="small">Save log</button>
+      <button id="btn-copy-problems" class="small" title="Copy every kept warning and error, in full, to the clipboard">Copy warnings and errors</button>
+    </div>
+    <pre id="log"></pre>
+  </details>
+
+  <dialog id="dlg-compare">
+    <form method="dialog" class="dlg">
+      <h2>Compare two backups</h2>
+      <p>Pick two backup .zip files: two GP200 Librarian backups, or one of ours and one made by
+        GP-200 Patch Manager. Every byte is compared; differences are listed, never ignored.</p>
+      <label>Backup A <input type="file" id="cmp-a" accept=".zip"></label>
+      <label>Backup B <input type="file" id="cmp-b" accept=".zip"></label>
+      <div class="dlg-actions">
+        <button type="button" id="btn-cmp-run" class="primary">Compare</button>
+        <button type="button" id="btn-cmp-save" class="small" disabled>Save report</button>
+        <button value="close">Close</button>
+      </div>
+      <pre id="cmp-out"></pre>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-write">
+    <form method="dialog" class="dlg">
+      <h2 id="write-title"></h2>
+      <ul id="write-lines" class="write-lines"></ul>
+      <p class="write-note">Before anything is written, the current contents of the destination are saved
+        (a download, plus the browser's journal). The destination is then read again; if it has changed, nothing is written.</p>
+      <label class="write-ack"><input type="checkbox" id="chk-write-ack"> <span id="write-ack-text"></span></label>
+      <div class="dlg-actions">
+        <button type="button" id="btn-write-go" class="write" disabled></button>
+        <button value="cancel" id="btn-write-cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-nofile">
+    <form method="dialog" class="dlg">
+      <h2>No confirmed before-image file</h2>
+      <p id="nofile-why"></p>
+      <p>Nothing is written to the pedal until the before-image of <b id="nofile-slot"></b> is saved as a file and
+        confirmed on disk (read back and checked). Try again, perhaps in another folder, or cancel.</p>
+      <div class="dlg-actions">
+        <button value="cancel" id="btn-nofile-cancel" class="primary" autofocus>Cancel: write nothing</button>
+        <button value="retry" id="btn-nofile-retry">Try saving again</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- V2: steady information about the pedal, fixed at the bottom. Messages, progress and results stay at the top. -->
+  <footer class="status-strip" id="status-strip" aria-label="Pedal status">
+    <span class="conn-detail" id="conn-detail"></span>
+    <span class="conn-detail" id="active-slot" title="Which patch the pedal is on. Known only after this app selects a slot or the pedal reports a change; the pedal does not report it at connect."></span>
+    <span class="strip-read" id="strip-read">Not read yet</span>
+    <button id="btn-strip-log" class="small" type="button" aria-expanded="false">Log</button>
+  </footer>
+
+  <footer class="credits">
+    GP200 Librarian &middot; GPL-3.0 &middot; builds on
+    <a href="https://github.com/donpark2000/GP-200-Patch-Manager-Web" target="_blank" rel="noopener">GP-200 Patch Manager</a>
+    and <a href="https://github.com/kabir0st/gp200-studio" target="_blank" rel="noopener">GP200 Studio</a> &middot;
+    not made by or affiliated with Valeton
+  </footer>
+</body>
+</html>
