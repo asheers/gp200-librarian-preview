@@ -48,6 +48,19 @@ export function attachLongPress(target, fire, { ms = LONG_PRESS_MS, timers = glo
 
 export const DRAG_START_PX = 8;
 
+/** 0.9.1: auto-scroll while a drag is near the top or bottom of the visible banks. Starting values; tune here. */
+export const AUTO_SCROLL = Object.freeze({ edgePx: 72, maxStepPx: 18 });
+
+/**
+ * 0.9.1: how far to scroll this frame (negative: up; 0: none) for a pointer at `y`, given the visible band
+ * {top, bottom} (between the sticky tabs bar and the fixed status strip). Faster nearer the edge; at most maxStepPx,
+ * also when the pointer is over the bars or outside the window.
+ */
+export function autoScrollStep(y, { top, bottom }, { edgePx, maxStepPx } = AUTO_SCROLL) {
+  const depth = y < top + edgePx ? y - (top + edgePx) : y > bottom - edgePx ? y - (bottom - edgePx) : 0;
+  return Math.sign(depth) * Math.min(maxStepPx, Math.ceil((Math.abs(depth) / edgePx) * maxStepPx));
+}
+
 /**
  * V5 Lite: desktop mouse drag of one tile onto another visible tile. Mouse only (touch keeps the menus and
  * the panel), left button, no Ctrl/Shift/Meta (those select), never from a button on the tile. Below
@@ -56,11 +69,17 @@ export const DRAG_START_PX = 8;
  * `hover(to, from)` marks the tile under the pointer (null when none). Exported for tests.
  * Look only (V5 polish): a grab cursor while a drag is possible, then a floating copy of the tile under the
  * pointer (pointer-events none, so it never hides the drop target from elementFromPoint), removed on every end.
+ * 0.9.1: while dragging, a frame loop scrolls the page when the pointer is near an edge of `edges()` (the visible
+ * band) and re-marks the tile now under the still pointer; every end stops it. No requestAnimationFrame: no scroll.
  */
-export function attachMouseDrag(target, slot, { drop, canDrag = () => true, hover = () => {}, doc = target.ownerDocument }) {
+export function attachMouseDrag(target, slot, { drop, canDrag = () => true, hover = () => {}, doc = target.ownerDocument,
+  autoScroll = AUTO_SCROLL, edges = () => ({ top: 0, bottom: doc.defaultView.innerHeight }) }) {
   let start = null;
   let over = null;
   let ghost = null;
+  let last = null; // the latest pointer position, for the frame loop
+  let frame = null;
+  const win = doc.defaultView;
   const root = doc.documentElement;
   const place = (e) => { ghost.style.transform = `translate(${e.clientX - start.ox}px, ${e.clientY - start.oy}px)`; };
   const lift = (e) => {
@@ -83,7 +102,22 @@ export function attachMouseDrag(target, slot, { drop, canDrag = () => true, hove
     const t = doc.elementFromPoint(e.clientX, e.clientY)?.closest?.(".tile");
     return t ? Number(t.dataset.slot) : null;
   };
+  const tick = () => {
+    frame = null;
+    if (!start?.moving || !last) return;
+    const dy = autoScrollStep(last.clientY, edges(), autoScroll);
+    const before = win.scrollY;
+    if (dy) win.scrollBy(0, dy);
+    if (win.scrollY !== before) { // the page moved under a still pointer: mark what is under it now
+      const to = tileAt(last);
+      if (to !== over) hover((over = to), slot);
+    }
+    frame = win.requestAnimationFrame(tick);
+  };
   const end = () => {
+    if (frame !== null) win.cancelAnimationFrame(frame);
+    frame = null;
+    last = null;
     start = null;
     over = null;
     target.classList.remove("dragging");
@@ -115,7 +149,9 @@ export function attachMouseDrag(target, slot, { drop, canDrag = () => true, hove
       target.classList.add("dragging");
       doc.addEventListener("keydown", onKey, true);
       lift(e);
+      if (win?.requestAnimationFrame) frame = win.requestAnimationFrame(tick);
     } else if (ghost) place(e);
+    last = { clientX: e.clientX, clientY: e.clientY };
     const to = tileAt(e);
     if (to !== over) hover((over = to), slot);
   });
@@ -152,9 +188,10 @@ function el(doc, tag, cls, text) {
  * @param {(from: number, to: number) => void} [o.onDrop] V5 Lite: a mouse drag of one tile onto another
  * @param {() => boolean} [o.canDrag] V5 Lite: whether a drag may start now
  * @param {(from: number, to: number) => {ok: boolean}} [o.dropInfo] V5 Lite: may this tile take that drop
+ * @param {() => {top: number, bottom: number}} [o.dragEdges] 0.9.1: the visible band for auto-scroll
  */
 export function createBankGrid({ low, high, onTile, onBankCheck, onMenu, onLongPress = () => {}, onDup = () => {},
-  onDrop = () => {}, canDrag = () => false, dropInfo = () => ({ ok: true }), doc = document }) {
+  onDrop = () => {}, canDrag = () => false, dropInfo = () => ({ ok: true }), dragEdges, doc = document }) {
   const tiles = new Array(256);
   let hovered = null;
   const hover = (slot, from) => {
@@ -206,7 +243,7 @@ export function createBankGrid({ low, high, onTile, onBankCheck, onMenu, onLongP
       top.append(pos, badges, tmenu);
       t.append(top, el(doc, "div", "t-name", "—"), el(doc, "div", "t-sub"));
       attachLongPress(t, () => onLongPress(slot));
-      attachMouseDrag(t, slot, { drop: onDrop, canDrag, hover, doc });
+      attachMouseDrag(t, slot, { drop: onDrop, canDrag, hover, doc, edges: dragEdges });
       t.addEventListener("click", (e) => {
         if (t.longPressed || t.dragged) {
           t.longPressed = t.dragged = false; // the click that ends a long press or a drag is not a tap

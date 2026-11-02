@@ -363,12 +363,6 @@ body.panel-undocked #btn-sum-close { display: inline-block; }
 @media (max-width: 599px) {
   body.panel-undocked .summary { left: 0; width: auto; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.55); }
 }
-/* Rename stays demo-only (V1 brief): tagged wherever it is offered. A pseudo-element, so the label is unchanged. */
-.menu-item[data-id="rename"]::after, .sum-actions [data-id="rename"]::after {
-  content: "Demo only"; display: inline-block; margin-left: 8px; padding: 0 6px; border: 1px solid var(--warn); border-radius: 999px;
-  color: var(--warn); font-size: 11px; font-weight: 700; line-height: 16px; vertical-align: 1px;
-}
-.sum-actions .act[data-id="rename"]::after { justify-self: start; margin: 3px 0 0; } /* V3: its own line, under the description */
 
 /* ---- ⋯ menus ---- */
 .menu {

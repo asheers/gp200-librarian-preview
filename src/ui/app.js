@@ -687,7 +687,7 @@ function renderEngineUndo() {
 }
 
 /** S3.2 slice 4: refresh the latest-undoable record from the operations store. E1: on the real pedal, only
- *  a verified single-patch Copy, Move or Swap made by the engine (realPedalUndoable). */
+ *  a verified single-patch Copy, Move, Swap or Rename made by the engine (realPedalUndoable). */
 async function refreshEngineUndo() {
   try {
     const r = findUndoable(await operationsStore.all());
@@ -2376,10 +2376,10 @@ function showHelp() {
       { heading: "Backups", lines: ["Open a backup file or a .prst file to look through it and compare it with your pedal. Read only.",
         "A full backup also shows its templates (to import) and its history (a record only)."] },
       { heading: "Dropping a file", lines: ["Drop a backup or .prst file onto the window to open it in Backups, or a template file to import it in Templates. Nothing is written to the pedal."] },
-      { heading: "Undo", lines: ["After a change to the pedal -- a Test-tools copy, or a Copy, Move or Swap from a menu -- an Undo button " +
+      { heading: "Undo", lines: ["After a change to the pedal -- a Test-tools copy, or a Copy, Move, Swap or Rename from a menu -- an Undo button " +
         "appears on the Pedal tab, saying what it undoes. Only the most recent change can be undone, and only while nothing else has " +
-        "touched its slots since.", "On your GP-200 (not the demo), Copy, Move and Swap work on one patch at a time, between any slots. " +
-        "Rename, several patches and banks are demo mode only, for now."] },
+        "touched its slots since.", "On your GP-200 (not the demo), Copy, Move and Swap work on one patch at a time, between any slots, " +
+        "and Rename changes one patch's name in its own slot. Several patches and banks are demo mode only, for now."] },
       { heading: "More ▾", lines: ["Less common things: read the pedal again, compare two backup files, the log, and what's coming.",
         "Backup folder…, on the Pedal tab: choose a folder where each change's before-image file is saved automatically, without a save dialog.",
         "Test tools (bank 60), on the Pedal tab: a temporary development tool that copies one patch into bank 60 to check writing to the pedal."] },
@@ -2394,7 +2394,10 @@ function init() {
   $("demo-banner").hidden = !DEMO;
   if (DEMO) $("btn-connect").textContent = "Connect demo pedal";
   grid = createBankGrid({ low: $("banks-low"), high: $("banks-high"), onTile, onBankCheck, onMenu, onLongPress, onDup,
-    onDrop, canDrag, dropInfo: (from, to) => ({ ok: Array.isArray(dropChoices(from, to)) }) });
+    onDrop, canDrag, dropInfo: (from, to) => ({ ok: Array.isArray(dropChoices(from, to)) }),
+    // 0.9.1: auto-scroll edges: the band between the sticky tabs bar and the fixed status strip (tiles under them are hidden)
+    dragEdges: () => ({ top: Math.max(0, $("place-tabs").getBoundingClientRect().bottom),
+      bottom: Math.min(window.innerHeight, $("status-strip").getBoundingClientRect().top) }) });
   bankMap = createBankMap({ root: $("map-grid"), onBank: goToBank });
   $("btn-map").addEventListener("click", () => setLayout("mapShown", !ui.mapShown));
   $("btn-panel").addEventListener("click", () => setLayout("panelHidden", !ui.panelHidden));
@@ -2623,8 +2626,9 @@ async function startOperation(id, sources, to = null) {
   await runOperation(kind === "swap" ? { kind: "swap", a: sources, b: start } : { kind, from: sources, to: start });
 }
 
-/** V5 Lite: a mouse drag may start only on the live pedal, connected and idle. Demo pedal only until its hardware check. */
-const canDrag = () => DEMO && ui.mode === "live" && state.connected && !!state.device && !state.busy;
+/** V5 Lite: a mouse drag may start only on the live pedal, connected and idle. Real pedal since 0.9.0 (dropChoices,
+ *  startOperation and runOperation apply the real-pedal policy). */
+const canDrag = () => ui.mode === "live" && state.connected && !!state.device && !state.busy;
 
 /**
  * V5 Lite: what the drop chooser offers for one patch dropped on another (docs/PHASE3_S3_BRIEF.md §3.2), or the
@@ -2671,10 +2675,9 @@ async function onDrop(from, to) {
 
 /**
  * S3.3: Rename…, one patch, from its menu. Same destination-selector dialog shape as Copy/Move/
- * Swap, repurposed for a name instead of a slot. DEMO PEDAL ONLY, same gate as every other write.
+ * Swap, repurposed for a name instead of a slot. Real pedal since 0.8.0 (realPedalAllows in runOperation).
  */
 async function startRename(slot) {
-  if (!DEMO) { setStatus("Rename is available in demo mode only, for now.", "err"); return; }
   if (state.busy || !state.device || !state.connected) return;
   const current = ui.view.slots[slot]?.name ?? "";
   const typed = await askDestination({
@@ -2802,9 +2805,9 @@ const slotsNow = (slots) => slots.map((d) => {
  */
 async function runOperation(op) {
   if (!state.device) return;
-  if (!DEMO && !realPedalAllows(op)) { // 0.6.0: one patch, Copy, Move or Swap, between any two slots; nothing else
-    log.warn(`Refused on the real pedal (only one-patch Copy, Move and Swap are enabled): ${JSON.stringify(op)}`);
-    setStatus("Refused: on your GP-200 only Copy, Move and Swap of one patch are enabled. Nothing was written.", "err");
+  if (!DEMO && !realPedalAllows(op)) { // 0.6.0: one patch, Copy, Move or Swap, between any two slots; 0.8.0: Rename; nothing else
+    log.warn(`Refused on the real pedal (only one-patch Copy, Move, Swap and Rename are enabled): ${JSON.stringify(op)}`);
+    setStatus("Refused: on your GP-200 only Copy, Move, Swap and Rename of one patch are enabled. Nothing was written.", "err");
     return;
   }
   const bank = op.kind.startsWith("bank-");
@@ -2890,7 +2893,7 @@ async function engineUndo() {
   if (state.busy || !state.device || !state.connected || !state.engineUndo) return;
   const record = state.engineUndo;
   if (!DEMO && !realPedalUndoable(record)) { // E1: refreshEngineUndo never offers anything else; checked again here
-    setStatus("Refused: on your GP-200 only the Undo of a one-patch Copy, Move or Swap is enabled. Nothing was written.", "err");
+    setStatus("Refused: on your GP-200 only the Undo of a one-patch Copy, Move, Swap or Rename is enabled. Nothing was written.", "err");
     return;
   }
   const what = `Undo: ${record.action ?? record.title ?? "last operation"}`;

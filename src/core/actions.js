@@ -22,7 +22,7 @@ const IN_BACKUP = (c) => c.present || "Not in this backup";
 /**
  * S3.2 slice 1: Copy, Move and Swap for one patch at a time. The real pedal
  * may use only the actions in REAL_PEDAL_ACTIONS (0.6.0: Copy, Move and Swap,
- * any slot); the rest (Rename) is demo-only.
+ * any slot; 0.8.0: Rename).
  */
 const PATCH_WRITE = (id) => (c) => (!c.demo && !REAL_PEDAL_ACTIONS.includes(id) ? "Demo mode only, for now"
   : !c.read ? "Not read yet" : c.connected ? true : "Connect first");
@@ -57,7 +57,7 @@ export const ACTIONS = Object.freeze([
   { id: "copy-to", label: "Copy to…", scope: "patch", enabled: PATCH_WRITE("copy-to") },
   { id: "move-to", label: "Move to…", scope: "patch", enabled: PATCH_WRITE("move-to") },
   { id: "swap-with", label: "Swap with…", scope: "patch", enabled: PATCH_WRITE("swap-with") },
-  // S3.3: rename one patch, same demo-only gate as Copy/Move/Swap (PATCH_WRITE above)
+  // S3.3: rename one patch, same gate as Copy/Move/Swap (PATCH_WRITE above; real pedal since 0.8.0)
   { id: "rename", label: "Rename…", scope: "patch", enabled: PATCH_WRITE("rename") },
   // bank
   { id: "select-bank", label: "Select this bank", scope: "bank", enabled: () => true },

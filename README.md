@@ -1,8 +1,8 @@
 # GP200 Librarian (TEST)
 
 A browser-based patch librarian for the Valeton GP-200 (Web MIDI with SysEx, Chrome or Edge).
-This repository holds only the published files of version 0.7.1, built from source commit
-`ddcc5c4`. Licence: GPL-3.0-only (see LICENSE and ATTRIBUTION.md).
+This repository holds only the published files of version 0.9.1, built from source commit
+`a3fb274`. Licence: GPL-3.0-only (see LICENSE and ATTRIBUTION.md).
 
 **TEST build: not the live release.**
 

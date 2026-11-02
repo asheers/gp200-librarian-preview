@@ -58,6 +58,8 @@ export class NameError extends Error {
 export function validateName(text) {
   if (typeof text !== "string" || text.length === 0) throw new NameError("empty", "the name is empty");
   if (text.length > NAME_LEN) throw new NameError("too-long", `the name is ${text.length} characters; at most ${NAME_LEN} are allowed`);
+  // No dump on file has a leading or trailing space (RESEARCH.md §14), so neither is assumed to be stored as typed.
+  if (text !== text.trim()) throw new NameError("edge-space", "the name starts or ends with a space; remove it");
   const bad = [...new Set([...text].filter((ch) => !NAME_ALLOWED_CHARS.has(ch)))];
   if (bad.length) {
     throw new NameError("bad-char", `"${bad.join("")}" ${bad.length === 1 ? "is" : "are"} not a character the pedal has been shown ` +

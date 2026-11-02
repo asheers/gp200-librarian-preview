@@ -186,11 +186,11 @@ function previewUndo(plan, action) {
   });
   const lost = plan.replaced.map((s) => `${label(s)} ${quoted(plan.inputs.find((i) => i.slot === s).name)}`);
   return {
-    headline: `Undo "${action}"?`, rows,
+    headline: `Undo: ${action}?`, rows, // not quoted: a Rename's action already holds the name in quotes
     tickBox: !lost.length ? null : lost.length === 1 ? `I understand ${lost[0]} will be replaced.`
       : `I understand that ${lost.length} patches will be replaced: ${lost.join(", ")}.`,
     notes: [
-      `The patches from before "${action}" are written back, from its saved record.`,
+      "The patches from before it are written back, from its saved record.",
       "A backup of these slots as they are now is saved first, and every slot is read back and checked.",
       ...plan.held.map((h) => `During this, ${quoted(plan.inputs.find((i) => i.slot === h.slot).name)} is held in the backup until it is written back.`),
       OTHER_EDITORS_LINE,
