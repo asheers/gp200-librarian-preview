@@ -123,7 +123,7 @@ function slotsOf(record) {
   return [...out.values()];
 }
 
-async function readAll(device, slots, log) {
+async function readAll(device, slots, log, logLabel = "Check and recover") {
   const reads = new Map();
   for (const slot of slots) {
     try {
@@ -131,7 +131,7 @@ async function readAll(device, slots, log) {
       reads.set(slot, isDump(decoded) ? { dump: decoded } : { error: `read ${decoded?.length ?? "no"} bytes` });
     } catch (e) {
       reads.set(slot, { error: e.message });
-      log?.warn(`Check and recover: ${label(slot)} could not be read (${e.message})`);
+      log?.warn(`${logLabel}: ${label(slot)} could not be read (${e.message})`);
     }
   }
   return reads;
@@ -145,7 +145,7 @@ const same = (a, b) => isDump(a) && isDump(b) && classifyDumpDiff(a, b).contentI
  * @param {object} record an operation record, or a legacyOperation() view
  * @param {{ownership: import("./ownership.js").PedalOwnership, log?: object, now?: () => Date}} o
  */
-export async function checkOperation(device, record, { ownership, log = null, now = () => new Date() }) {
+export async function checkOperation(device, record, { ownership, log = null, now = () => new Date(), logLabel = "Check and recover" }) {
   const parts = slotsOf(record);
   if (!parts.length || !parts.some((p) => p.step)) {
     throw new RecoveryError("damaged", "The record of this operation does not say which slots it wrote, so it cannot be checked. " +
@@ -157,7 +157,7 @@ export async function checkOperation(device, record, { ownership, log = null, no
   const operation = await lockFor(ownership);
   let reads;
   try {
-    reads = await readAll(device, parts.map((p) => p.slot), log);
+    reads = await readAll(device, parts.map((p) => p.slot), log, logLabel);
   } finally {
     operation.end();
   }
@@ -202,7 +202,7 @@ export async function checkOperation(device, record, { ownership, log = null, no
   Object.defineProperty(check, "reads", { value: freshReads, enumerable: false });
   check.lines = describe(check);
   check.proposals = proposals(check);
-  log?.info(`Check and recover (${check.action}): ${overall}; ` + slots.map((s) => `${s.label} ${s.found}`).join(", ") +
+  log?.info(`${logLabel} (${check.action}): ${overall}; ` + slots.map((s) => `${s.label} ${s.found}`).join(", ") +
     (heldOnlyInBackup.length ? `; only in the saved backup: ${heldOnlyInBackup.map((h) => `${h.label} "${h.name}"`).join(", ")}` : ""), { keep: true });
   return check;
 }

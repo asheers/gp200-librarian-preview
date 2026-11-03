@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 export const APP_NAME = "GP200 Librarian";
-export const APP_VERSION = "0.9.1";
+export const APP_VERSION = "0.11.0";
 // Stamped by tools/build-site.js with TEST or LIVE and the source commit. DEV = an unbuilt local copy.
-export const BUILD = Object.freeze({"channel":"TEST","commit":"a3fb274"});
+export const BUILD = Object.freeze({"channel":"TEST","commit":"7cb7840"});

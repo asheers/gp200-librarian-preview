@@ -376,7 +376,7 @@ function renderSummaryPanel() {
       if (m.length) s.matchText = `Same patch also: ${m.join("; ")}.`;
     }
     if (s?.read) s.exactHint = exactHint(slot);
-    renderSummary($("summary-body"), s, actionsFor("patch", { read: slot !== null && ui.view.slots[slot].read, connected: state.connected, demo: DEMO, slot }),
+    renderSummary($("summary-body"), s, actionsFor("patch", { read: slot !== null && ui.view.slots[slot].read, connected: state.connected, unused: slot !== null && ui.view.slots[slot].unused, demo: DEMO, slot }),
       (id) => doAction(id, "patch", slot), onGroup, { empty: PANEL_EMPTY, kinds: slot === null ? [] : [...new Set(ui.view.slots[slot].irNam.map((d) => d.kind))] });
   }
   $("summary").classList.toggle("open", ui.summaryOpen && slot !== null);
@@ -447,7 +447,7 @@ function onMenu(kind, id, anchor) {
   if (kind === "patch") {
     const s = ui.view.slots[id];
     openMenu(anchor, `${s.label}${s.read ? ` · ${s.unused ? "unused" : s.name || "(no name)"}` : ""}`,
-      actionsFor("patch", { read: s.read, connected: state.connected, demo: DEMO, slot: id }), (a) => doAction(a, "patch", id));
+      actionsFor("patch", { read: s.read, connected: state.connected, unused: s.unused, demo: DEMO, slot: id }), (a) => doAction(a, "patch", id));
   } else {
     const b = ui.view.banks[id - 1];
     openMenu(anchor, `Bank ${id}`, actionsFor("bank", { anyRead: b.anyRead, connected: state.connected, demo: DEMO, bank: id, writableBanks: WRITABLE_BANKS }),
@@ -483,6 +483,9 @@ function doAction(id, kind, target) {
       break;
     case "rename":
       startRename(target);
+      break;
+    case "clear":
+      if (!state.busy && state.device && state.connected) runOperation({ kind: "clear", slot: target }); // the preview is the confirmation
       break;
     case "copy-bank-to":
     case "move-bank-to":
@@ -2376,10 +2379,11 @@ function showHelp() {
       { heading: "Backups", lines: ["Open a backup file or a .prst file to look through it and compare it with your pedal. Read only.",
         "A full backup also shows its templates (to import) and its history (a record only)."] },
       { heading: "Dropping a file", lines: ["Drop a backup or .prst file onto the window to open it in Backups, or a template file to import it in Templates. Nothing is written to the pedal."] },
-      { heading: "Undo", lines: ["After a change to the pedal -- a Test-tools copy, or a Copy, Move, Swap or Rename from a menu -- an Undo button " +
+      { heading: "Undo", lines: ["After a change to the pedal -- a Test-tools copy, or a Copy, Move, Swap, Rename or Clear from a menu -- an Undo button " +
         "appears on the Pedal tab, saying what it undoes. Only the most recent change can be undone, and only while nothing else has " +
         "touched its slots since.", "On your GP-200 (not the demo), Copy, Move and Swap work on one patch at a time, between any slots, " +
-        "and Rename changes one patch's name in its own slot. Several patches and banks are demo mode only, for now."] },
+        "Rename changes one patch's name in its own slot, Clear… puts the built-in default back in one slot, and a bank's menu copies, moves or swaps all four of its slots. " +
+        "Several selected patches are demo mode only, for now."] },
       { heading: "More ▾", lines: ["Less common things: read the pedal again, compare two backup files, the log, and what's coming.",
         "Backup folder…, on the Pedal tab: choose a folder where each change's before-image file is saved automatically, without a save dialog.",
         "Test tools (bank 60), on the Pedal tab: a temporary development tool that copies one patch into bank 60 to check writing to the pedal."] },
@@ -2710,12 +2714,11 @@ const WRITABLE_BANKS = [...new Set(WRITABLE_SLOTS.map((s) => Math.floor(s / 4) +
 
 /**
  * S3.2 slice 3: Copy bank to… / Move bank to… / Swap with bank… from a bank's menu. All four
- * positions, A-D, unused slots included, through the same runOperation as one patch. DEMO
- * PEDAL ONLY (D3). A bank Move or Swap writes both banks; the menu, the selector and the planner
- * all follow the write zone.
+ * positions, A-D, unused slots included, through the same runOperation as one patch. Real pedal
+ * since 0.10.0 (runOperation's realPedalAllows still checks it). A bank Move or Swap writes both
+ * banks; the menu, the selector and the planner all follow the write zone.
  */
 async function startBankOperation(id, fromBank) {
-  if (!DEMO) { setStatus("Bank Copy, Move and Swap are available in demo mode only, for now.", "err"); return; }
   if (state.busy || !state.device || !state.connected) return;
   const kind = { "copy-bank-to": "copy", "move-bank-to": "move", "swap-bank-with": "swap" }[id];
   const verb = kind[0].toUpperCase() + kind.slice(1);
@@ -2805,9 +2808,9 @@ const slotsNow = (slots) => slots.map((d) => {
  */
 async function runOperation(op) {
   if (!state.device) return;
-  if (!DEMO && !realPedalAllows(op)) { // 0.6.0: one patch, Copy, Move or Swap, between any two slots; 0.8.0: Rename; nothing else
-    log.warn(`Refused on the real pedal (only one-patch Copy, Move, Swap and Rename are enabled): ${JSON.stringify(op)}`);
-    setStatus("Refused: on your GP-200 only Copy, Move, Swap and Rename of one patch are enabled. Nothing was written.", "err");
+  if (!DEMO && !realPedalAllows(op)) { // 0.6.0: one patch, Copy, Move or Swap, between any two slots; 0.8.0: Rename; 0.10.0: banks; 0.11.0: Clear
+    log.warn(`Refused on the real pedal (only one-patch Copy, Move, Swap, Rename and Clear, and bank Copy, Move and Swap are enabled): ${JSON.stringify(op)}`);
+    setStatus("Refused: on your GP-200 only Copy, Move, Swap, Rename and Clear of one patch, and bank Copy, Move and Swap, are enabled. Nothing was written.", "err");
     return;
   }
   const bank = op.kind.startsWith("bank-");
@@ -2818,6 +2821,9 @@ async function runOperation(op) {
     if (op.kind === "rename") {
       sources = dests = [op.slot];
       what = `Rename ${slotToDisplayLabel(op.slot)} to "${op.name}"`;
+    } else if (op.kind === "clear") {
+      sources = dests = [op.slot];
+      what = `Clear ${slotToDisplayLabel(op.slot)}`;
     } else {
       sources = bank ? bankSlots(op.fromBank) : op.kind === "swap" ? op.a : op.from;
       const start = op.kind === "swap" ? op.b : op.to;
@@ -2829,7 +2835,7 @@ async function runOperation(op) {
     return;
   }
   // As the Test tools do: an unfinished operation blocks its slots before anything is read or previewed.
-  const writes = kind === "copy" || kind === "rename" ? dests : [...sources, ...dests];
+  const writes = kind === "copy" || kind === "rename" || kind === "clear" ? dests : [...sources, ...dests];
   const clear = await writeClearance(operationsStore, journal, writes);
   if (!clear.ok) {
     setStatus(`${what}: ${clear.message}`, "err");

@@ -27,13 +27,12 @@ const IN_BACKUP = (c) => c.present || "Not in this backup";
 const PATCH_WRITE = (id) => (c) => (!c.demo && !REAL_PEDAL_ACTIONS.includes(id) ? "Demo mode only, for now"
   : !c.read ? "Not read yet" : c.connected ? true : "Connect first");
 /**
- * S3.2 slice 3: bank Copy, Move and Swap, all four positions. Demo pedal only,
- * on the real pedal (D3). `c.writableBanks` are the banks the write zone covers
+ * S3.2 slice 3: bank Copy, Move and Swap, all four positions; on the real pedal
+ * too since 0.10.0. `c.writableBanks` are the banks the write zone covers
  * in full (all 64 since 0.6.0): a bank Copy needs one other than this bank; a
  * bank Move or Swap writes BOTH banks, so it needs this one and another.
  */
 const BANK_WRITE = (kind) => (c) => {
-  if (!c.demo) return "Demo mode only, for now";
   if (!c.anyRead) return "Not read yet";
   if (!c.connected) return "Connect first";
   const zone = c.writableBanks ?? [];
@@ -59,6 +58,8 @@ export const ACTIONS = Object.freeze([
   { id: "swap-with", label: "Swap with…", scope: "patch", enabled: PATCH_WRITE("swap-with") },
   // S3.3: rename one patch, same gate as Copy/Move/Swap (PATCH_WRITE above; real pedal since 0.8.0)
   { id: "rename", label: "Rename…", scope: "patch", enabled: PATCH_WRITE("rename") },
+  // 0.11.0: one patch back to the built-in default (the last write action); an unused slot has nothing to clear.
+  { id: "clear", label: "Clear…", scope: "patch", enabled: (c) => { const r = PATCH_WRITE("clear")(c); return r === true && c.unused ? "Already unused" : r; } },
   // bank
   { id: "select-bank", label: "Select this bank", scope: "bank", enabled: () => true },
   { id: "backup-bank", label: "Back up this bank…", scope: "bank", enabled: (c) => c.anyRead || "Not read yet" },
@@ -92,9 +93,8 @@ export const PLANNED = Object.freeze([
   { id: "restore", label: "Restore from a backup", what: "put patches from a backup back on the pedal" },
   { id: "template-apply", label: "Apply a template", what: "put a template on the pedal" },
 ].map(Object.freeze));
-// Note: single-patch Copy, Move and Swap are built (S3.2 slice 1), and bank
-// Copy, Move and Swap (slice 3), demo pedal only; the real pedal waits for its
-// own hardware-approved write gate.
+// Note: single-patch Copy, Move and Swap (S3.2 slice 1) and bank Copy, Move and
+// Swap (slice 3) are built; the real pedal may run them since 0.6.0 and 0.10.0.
 
 /**
  * The actions for a scope, with their state in this context.

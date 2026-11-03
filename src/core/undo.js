@@ -97,7 +97,7 @@ export function findUndoable(operations) {
  * @param {{ownership: import("./ownership.js").PedalOwnership, log?: object, now?: () => Date}} o
  */
 export async function checkUndo(device, record, { ownership, log = null, now = () => new Date() } = {}) {
-  const check = await checkOperation(device, record, { ownership, log, now });
+  const check = await checkOperation(device, record, { ownership, log, now, logLabel: "Undo check" });
   if (check.overall !== "completed") {
     // A written slot must read "intended" (what the operation verified); any other input must
     // still read "original" (untouched by it). Anything else is exactly what changed.
@@ -136,7 +136,7 @@ export function buildUndoPlan(record, check, { zone = WRITABLE_SLOTS, register =
     if (!isDump(current)) throw new UndoError("no-check", `${label(s.slot)} was not freshly read; check again.`);
     return {
       index, slot: s.slot, label: label(s.slot), from: null, origin: s.from ?? null, transform: "restore",
-      why: `undo: put back ${label(s.slot)}'s patch from before "${record.action ?? record.title ?? "this operation"}"`,
+      why: `undo: put back ${label(s.slot)}'s patch from before ${record.action ?? record.title ?? "this operation"}`,
       content: inp.before, image: buildWriteImage(inp.before, s.slot), expected: expectedAfterWrite(inp.before, s.slot, current), expectBefore: current,
       dependsOn: [], heldUntil: [], name: nameOf(inp.before), irNam: irNamDependencies(inp.before),
     };

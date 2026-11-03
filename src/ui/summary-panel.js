@@ -25,6 +25,8 @@ const PRIMARY = Object.freeze({
   "swap-with": { what: "Exchange places with another slot", icon: ["M4 8h15l-4-4", "M20 16H5l4 4"] },
   rename: { what: "Change only the name", icon: ["M4 20h4L19 9l-4-4L4 16z", "M13 7l4 4"] },
 });
+/** 0.11.0: Clear… sits on its own below the grid, marked as the destructive one. */
+const CLEAR = Object.freeze({ what: "Reset this slot to the factory default", icon: ["M5 7h14", "M10 7V4h4v3", "M7 7l1 13h8l1-13"] });
 
 function icon(paths) {
   const s = document.createElementNS(SVG, "svg");
@@ -78,20 +80,27 @@ export function renderSummary(root, s, actions, onAction, onGroup = () => {}, { 
     b.addEventListener("click", () => onAction(a.id));
     return b;
   };
+  const actButton = (a, cls, d) => {
+    const b = button(a, cls);
+    const head = el("span", "act-label");
+    head.append(icon(d.icon), a.label);
+    // V3: a disabled action says why on screen, in place of its description (the reason comes from the registry).
+    b.append(head, el("span", a.enabled ? "act-what" : "act-why", a.enabled ? d.what : a.reason));
+    return b;
+  };
   const primary = shown.filter((a) => PRIMARY[a.id]);
   if (primary.length) {
     const grid = el("div", "sum-actions sum-primary");
-    for (const a of primary) {
-      const b = button(a, "act");
-      const head = el("span", "act-label");
-      head.append(icon(PRIMARY[a.id].icon), a.label);
-      // V3: a disabled action says why on screen, in place of its description (the reason comes from the registry).
-      b.append(head, el("span", a.enabled ? "act-what" : "act-why", a.enabled ? PRIMARY[a.id].what : a.reason));
-      grid.append(b);
-    }
+    for (const a of primary) grid.append(actButton(a, "act", PRIMARY[a.id]));
     root.append(grid);
   }
-  const rest = shown.filter((a) => !PRIMARY[a.id]);
+  const clear = shown.find((a) => a.id === "clear");
+  if (clear) {
+    const row = el("div", "sum-actions sum-clear");
+    row.append(actButton(clear, "act act-clear", CLEAR));
+    root.append(row);
+  }
+  const rest = shown.filter((a) => !PRIMARY[a.id] && a.id !== "clear");
   if (rest.length) {
     const list = el("div", "sum-more");
     for (const a of rest) {

@@ -56,7 +56,7 @@ import { EXPECTED_DUMP_LEN } from "./sysex.js";
 import { classifyDumpDiff } from "./volatile.js";
 import { WRITABLE_SLOTS } from "./write-guard.js";
 
-export const PLAN_KINDS = Object.freeze(["copy", "move", "swap", "bank-copy", "bank-move", "bank-swap", "rename"]);
+export const PLAN_KINDS = Object.freeze(["copy", "move", "swap", "bank-copy", "bank-move", "bank-swap", "rename", "clear"]);
 /** Seconds per write step, including its reads (design 3.6, CLI pacing measured in W1). */
 export const SECONDS_PER_WRITE = 2.5;
 
@@ -161,6 +161,14 @@ function targetsFor(op, info) {
         throw new PlanError(e.code ?? "bad-name", e.message);
       }
       targets.push({ slot, renameTo: op.name });
+      return { targets, sources: [slot], dests: [slot] };
+    }
+    case "clear": {
+      // 0.11.0: one patch back to the built-in default, the same clear a Move's source gets.
+      const slot = op.slot;
+      if (!isSlot(slot)) throw new PlanError("bad-slot", `slot ${slot} does not exist (slots are 1-A to 64-D)`);
+      if (info(slot).unused) throw new PlanError("source-unused", `${label(slot)} is already unused; there is nothing to clear`);
+      targets.push({ slot, clear: true });
       return { targets, sources: [slot], dests: [slot] };
     }
     case "bank-copy":
@@ -301,7 +309,7 @@ export function buildPlan(op, dumps, { zone = WRITABLE_SLOTS, moveClearAllowed =
       transform: t.clear ? "default" : t.renameTo !== undefined ? "rename" : "identity",
       content, image: buildWriteImage(content, t.slot), expected, expectBefore: before,
       noop: classifyDumpDiff(before, expected).contentIdentical,
-      why: t.clear ? `clear ${label(t.slot)} (moved away)`
+      why: t.clear ? (kind === "clear" ? `clear ${label(t.slot)}` : `clear ${label(t.slot)} (moved away)`)
         : t.renameTo !== undefined ? `rename ${label(t.slot)} to "${t.renameTo}"`
           : `${label(t.from)} → ${label(t.slot)}`,
     };
@@ -315,7 +323,7 @@ export function buildPlan(op, dumps, { zone = WRITABLE_SLOTS, moveClearAllowed =
   }
   const clears = steps.filter((s) => s.transform === "default");
   if (clears.length && !moveClearAllowed) {
-    throw new PlanError("clear-not-allowed", `a Move must clear ${clears.map((s) => label(s.slot)).join(", ")} to the built-in default, ` +
+    throw new PlanError("clear-not-allowed", `${kind === "clear" ? "Clear" : "a Move"} must clear ${clears.map((s) => label(s.slot)).join(", ")} to the built-in default, ` +
       "but the default check has not found that default on this pedal (a complete read is needed). Copy instead, or read the pedal again.");
   }
 
@@ -419,8 +427,8 @@ export function simulatePlan(plan, upTo = plan.steps.length) {
   return out;
 }
 
-const VERB = { copy: "Copy", move: "Move", swap: "Swap", "bank-copy": "Copy", "bank-move": "Move", "bank-swap": "Swap", rename: "Rename" };
-const PAST = { copy: "Copied", move: "Moved", swap: "Swapped", "bank-copy": "Copied", "bank-move": "Moved", "bank-swap": "Swapped", rename: "Renamed" };
+const VERB = { copy: "Copy", move: "Move", swap: "Swap", "bank-copy": "Copy", "bank-move": "Move", "bank-swap": "Swap", rename: "Rename", clear: "Clear" };
+const PAST = { copy: "Copied", move: "Moved", swap: "Swapped", "bank-copy": "Copied", "bank-move": "Moved", "bank-swap": "Swapped", rename: "Renamed", clear: "Cleared" };
 const ARROW = (kind) => (kind.endsWith("swap") ? "⇄" : "→");
 const bankOfSlot = (s) => Math.floor(s / 4) + 1;
 
@@ -428,6 +436,7 @@ const bankOfSlot = (s) => Math.floor(s / 4) + 1;
 export function historyTitle(plan) {
   if (plan.titles?.history) return plan.titles.history; // a recovery plan names itself (recovery.js)
   if (plan.kind === "rename") return `${PAST.rename} ${label(plan.dests[0])} to ${quoted(plan.steps[0].name)}`;
+  if (plan.kind === "clear") return `${PAST.clear} ${label(plan.dests[0])}`;
   if (plan.kind.startsWith("bank-")) {
     return `${PAST[plan.kind]} bank ${bankOfSlot(plan.sources[0])} ${ARROW(plan.kind)} bank ${bankOfSlot(plan.dests[0])}`;
   }
@@ -438,6 +447,7 @@ export function historyTitle(plan) {
 export function actionTitle(plan) {
   if (plan.titles?.action) return plan.titles.action;
   if (plan.kind === "rename") return `${VERB.rename} ${label(plan.dests[0])} to ${quoted(plan.steps[0].name)}`;
+  if (plan.kind === "clear") return `${VERB.clear} ${label(plan.dests[0])}`;
   if (plan.kind.startsWith("bank-")) {
     return `${VERB[plan.kind]} bank ${bankOfSlot(plan.sources[0])} ${ARROW(plan.kind)} bank ${bankOfSlot(plan.dests[0])}`;
   }
@@ -452,6 +462,7 @@ export function actionTitle(plan) {
 export function previewPlan(plan) {
   if (plan.preview) return plan.preview; // a recovery plan carries its own preview (recovery.js buildRecoveryPlan)
   const inp = new Map(plan.inputs.map((i) => [i.slot, i]));
+  const gone = plan.kind === "clear" ? "cleared" : "replaced";
   const writtenBy = new Map(plan.steps.map((s) => [s.slot, s]));
   const show = (unused, name) => (unused ? "(empty)" : name);
   const afterOf = (slot) => {
@@ -469,7 +480,7 @@ export function previewPlan(plan) {
     const now = show(i.unused, i.name);
     const changes = writtenBy.has(slot);
     let note = "";
-    if (plan.replaced.includes(slot)) note = `${quoted(i.name)} will be replaced`;
+    if (plan.replaced.includes(slot)) note = `${quoted(i.name)} will be ${gone}`;
     else if (!changes) note = "unchanged";
     return { slot, label: label(slot), now, after: afterOf(slot), changes, note };
   });
@@ -478,7 +489,9 @@ export function previewPlan(plan) {
   const d0 = plan.dests[0];
   const n0 = inp.get(s0).name;
   let headline;
-  if (plan.kind === "rename") {
+  if (plan.kind === "clear") {
+    headline = `Clear ${n0} from ${label(d0)}?`;
+  } else if (plan.kind === "rename") {
     headline = `Rename ${label(d0)} from ${quoted(n0)} to ${quoted(plan.steps[0].name)}?`;
   } else if (plan.kind.startsWith("bank-")) {
     headline = `${VERB[plan.kind]} bank ${bankOfSlot(s0)} ${plan.kind === "bank-swap" ? "with" : "to"} bank ${bankOfSlot(d0)}?`;
@@ -494,12 +507,15 @@ export function previewPlan(plan) {
 
   const lost = plan.replaced.map((s) => `${label(s)} ${quoted(inp.get(s).name)}`);
   const tickBox = !lost.length ? null : lost.length === 1
-    ? `I understand ${lost[0]} will be replaced.`
-    : `I understand that ${lost.length} patches will be replaced: ${lost.join(", ")}.`;
+    ? `I understand ${lost[0]} will be ${gone}.`
+    : `I understand that ${lost.length} patches will be ${gone}: ${lost.join(", ")}.`;
 
   const notes = [];
   if (plan.kind === "rename") {
     notes.push("Only the name changes. Every other byte of the patch — effects, settings, IR/NAM references — stays exactly as it is now.");
+  }
+  if (plan.kind === "clear") {
+    notes.push(`${label(d0)} gets the built-in default patch ("It's GP-200") and shows as unused. The patch is kept only in the backup saved first.`);
   }
   if (plan.kind === "move" || plan.kind === "bank-move") {
     const emptied = plan.steps.filter((s) => s.transform === "default").map((s) => label(s.slot));
