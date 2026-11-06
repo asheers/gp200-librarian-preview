@@ -48,9 +48,9 @@
 import { buildWriteImage, expectedAfterWrite, slotFieldMismatches } from "./copy.js";
 import { canonicalDefault, classifyDefault } from "./defaults.js";
 import { contentKey } from "./match.js";
-import { encodeName, validateName, withName } from "./names.js";
+import { encodeName, quoteName as quoted, validateName, withName } from "./names.js";
 import { displayName, irNamDependencies } from "./patch.js";
-import { bankSlots, BANKS, slotToDisplayLabel, TOTAL_SLOTS } from "./slots.js";
+import { bankSlots, BANKS, slotSpan as range, slotToDisplayLabel, TOTAL_SLOTS } from "./slots.js";
 import { WRITE_REFUSALS, writeRefused } from "./state-evidence.js";
 import { EXPECTED_DUMP_LEN } from "./sysex.js";
 import { classifyDumpDiff } from "./volatile.js";
@@ -68,8 +68,8 @@ export const SAFEGUARD_LINE = "A backup of the changed slots is saved first, and
 /** Decision 5 (2026-10-19): the one-tab lock cannot see other programs, browsers or addresses. */
 export const OTHER_EDITORS_LINE = "Close other MIDI editors (Valeton's editor, GP200 Studio) and any other Librarian window while writing: " +
   "they are not locked out.";
-export const STATE_REFUSAL = "This can't be done yet: it involves a patch whose settings the pedal reports differently " +
-  "depending on the active patch, and we haven't yet confirmed how to copy, move or replace it exactly.";
+export const STATE_REFUSAL = "This can't be done yet: this slot or patch is on the app's verification-safety list. Patches on the list " +
+  "read differently depending on which patch is active, so a write could not be verified reliably. The patch itself is not at fault.";
 
 export class PlanError extends Error {
   /** @param {string} code @param {string} message @param {object} [detail] */
@@ -84,8 +84,6 @@ export class PlanError extends Error {
 const label = (s) => slotToDisplayLabel(s);
 const isSlot = (s) => Number.isInteger(s) && s >= 0 && s < TOTAL_SLOTS;
 const nameOf = (dump) => displayName(dump) || "(no name)";
-const range = (slots) => (slots.length === 1 ? label(slots[0]) : `${label(slots[0])}…${label(slots[slots.length - 1])}`);
-const quoted = (n) => `"${n}"`;
 
 function asSlotList(v, what) {
   const list = Array.isArray(v) ? v : [v];
@@ -310,7 +308,7 @@ export function buildPlan(op, dumps, { zone = WRITABLE_SLOTS, moveClearAllowed =
       content, image: buildWriteImage(content, t.slot), expected, expectBefore: before,
       noop: classifyDumpDiff(before, expected).contentIdentical,
       why: t.clear ? (kind === "clear" ? `clear ${label(t.slot)}` : `clear ${label(t.slot)} (moved away)`)
-        : t.renameTo !== undefined ? `rename ${label(t.slot)} to "${t.renameTo}"`
+        : t.renameTo !== undefined ? `rename ${label(t.slot)} to ${quoted(t.renameTo)}`
           : `${label(t.from)} → ${label(t.slot)}`,
     };
   });
@@ -482,7 +480,9 @@ export function previewPlan(plan) {
     let note = "";
     if (plan.replaced.includes(slot)) note = `${quoted(i.name)} will be ${gone}`;
     else if (!changes) note = "unchanged";
-    return { slot, label: label(slot), now, after: afterOf(slot), changes, note };
+    // 0.12.0: with several patches, where each one comes from (names alone may repeat, and sources may be scattered).
+    const from = (plan.kind === "copy" || plan.kind === "move") && plan.sources.length > 1 ? writtenBy.get(slot)?.from : null;
+    return { slot, label: label(slot), now, after: afterOf(slot), origin: Number.isInteger(from) ? label(from) : null, changes, note };
   });
 
   const s0 = plan.sources[0];
@@ -554,12 +554,14 @@ export function previewPlan(plan) {
 /** The preview as plain text (log, tests, and the dialog's fallback), e.g. "  36-A   80s Chorus   →   (empty)". */
 export function formatPreview(p) {
   const w1 = Math.max(4, ...p.rows.map((r) => r.now.length));
-  const w2 = Math.max(5, ...p.rows.map((r) => r.after.length));
+  const afterText = (r) => (r.origin ? `${r.after} (from ${r.origin})` : r.after);
+  const w2 = Math.max(5, ...p.rows.map((r) => afterText(r).length));
   const lines = [p.headline, "", `        ${"Now".padEnd(w1)}     ${"After".padEnd(w2)}`];
   for (const r of p.rows) {
-    lines.push(`  ${r.label.padEnd(4)}  ${r.now.padEnd(w1)}  →  ${r.after.padEnd(w2)}${r.note ? `   ${r.note}` : ""}`.trimEnd());
+    lines.push(`  ${r.label.padEnd(4)}  ${r.now.padEnd(w1)}  →  ${afterText(r).padEnd(w2)}${r.note ? `   ${r.note}` : ""}`.trimEnd());
   }
-  const written = writtenSlotsLine(p.rows);
+  // 0.12.0: past a bank Move's 8 rows the sentence only repeats them; the rows name every slot.
+  const written = p.rows.length > 8 ? `This writes ${p.rows.filter((r) => r.changes).length} slots, each listed above.` : writtenSlotsLine(p.rows);
   lines.push("", ...(written ? [written] : []), ...p.notes);
   if (p.tickBox) lines.push("", `[ ] ${p.tickBox}`);
   return lines.join("\n");

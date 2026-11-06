@@ -52,6 +52,7 @@ import { classifyDefault } from "./defaults.js";
 import { executePlan } from "./executor.js";
 import { isOperationRecord, operationKey } from "./operations.js";
 import { checkOperation } from "./recovery.js";
+import { quoteName as quoted } from "./names.js";
 import { displayName, irNamDependencies } from "./patch.js";
 import { checkOrdering, OTHER_EDITORS_LINE, SECONDS_PER_WRITE, trackPatches } from "./plan.js";
 import { slotToDisplayLabel } from "./slots.js";
@@ -192,7 +193,8 @@ function previewUndo(plan, action) {
     notes: [
       "The patches from before it are written back, from its saved record.",
       "A backup of these slots as they are now is saved first, and every slot is read back and checked.",
-      ...plan.held.map((h) => `During this, ${quoted(plan.inputs.find((i) => i.slot === h.slot).name)} is held in the backup until it is written back.`),
+      ...(plan.held.length > 1 ? [`During this, ${plan.held.length} patches are held in the backup until they are written back.`]
+        : plan.held.map((h) => `During this, ${quoted(plan.inputs.find((i) => i.slot === h.slot).name)} is held in the backup until it is written back.`)),
       OTHER_EDITORS_LINE,
       `The pedal will switch to ${plan.steps[plan.steps.length - 1].label} while writing. Save any edits on the pedal first.`,
     ],
@@ -201,8 +203,6 @@ function previewUndo(plan, action) {
     swapInstead: false, confirmLabel: "Undo",
   };
 }
-
-const quoted = (n) => `"${n}"`;
 
 /**
  * Run a confirmed Undo plan through the normal executor (every gate:

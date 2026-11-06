@@ -141,7 +141,7 @@ function buildPicker(p, describe, fill) {
     for (const s of info) pips.append(Object.assign(document.createElement("i"), { className: s.locked ? "locked" : s.kind }));
     btn.append(span("pb-no", String(b)), pips);
     if (info.some((s) => s.locked)) btn.append(span("pb-lock", "🔒"));
-    btn.setAttribute("aria-label", `Bank ${b}: ${info.map((s) => `${s.label} ${s.locked ? "protected" : s.kind === "unused" ? "unused" : s.kind === "unread" ? "not read" : s.name}`).join(", ")}`);
+    btn.setAttribute("aria-label", `Bank ${b}: ${info.map((s) => `${s.label} ${s.locked ? "locked for verification safety" : s.kind === "unused" ? "unused" : s.kind === "unread" ? "not read" : s.name}`).join(", ")}`);
     if (p.mode === "bank") {
       const r = describe(String(b));
       btn.disabled = !r.ok;
@@ -168,11 +168,11 @@ function buildPicker(p, describe, fill) {
       btn.className = `pick-slot ${s.kind}${s.locked ? " locked" : ""}${picked.has(s.slot) ? " picked" : ""}`;
       btn.dataset.slot = s.slot;
       btn.append(span("ps-label", s.label), span("ps-name", s.kind === "unused" ? "Unused" : s.kind === "unread" ? "Not read yet" : s.name));
-      if (s.locked) btn.append(span("ps-why", "🔒 Protected"));
-      else if (!r.ok) btn.append(span("ps-why", r.text));
+      if (s.locked) btn.append(span("ps-why", "🔒 Locked"));
+      else if (!r.ok) btn.append(span("ps-why", r.short ?? r.text));
       btn.disabled = s.locked || !r.ok;
       btn.title = s.locked ? p.lockText : r.ok ? "" : r.text;
-      btn.setAttribute("aria-label", `${s.label}: ${btn.querySelector(".ps-name").textContent}${s.locked ? ". Protected: " + p.lockText : r.ok ? "" : `. ${r.text}`}`);
+      btn.setAttribute("aria-label", `${s.label}: ${btn.querySelector(".ps-name").textContent}${s.locked ? ". Locked: " + p.lockText : r.ok ? "" : `. ${r.text}`}`);
       btn.addEventListener("click", () => fill(s.label));
       slotsEl.append(btn);
     }
@@ -189,7 +189,7 @@ function buildPicker(p, describe, fill) {
     if (p.mode === "slot") {
       renderSlots();
       const lockedPick = r?.slot !== null && r && [...picked].some((s) => p.slots(Math.floor(s / 4) + 1)[s % 4]?.locked);
-      note.textContent = lockedPick ? `🔒 Protected: ${p.lockText}` : "";
+      note.textContent = lockedPick ? `🔒 Locked: ${p.lockText}` : "";
     }
   }
   return { el, follow };
@@ -238,14 +238,15 @@ export function askDestination({ title, hint = "", describe, ok = "Continue", fi
  * The choice marked `focus` (or the first) has the focus.
  * `tick` (a sentence, e.g. "I understand 60-C "Lead" will be replaced."): a checkbox in the
  * dialog; every `write` choice stays disabled until it is ticked, and is never returned unticked.
- * @param {{title: string, message: string|string[], tick?: string|null,
+ * @param {{title: string, message: string|{pre: string}|(string|{pre: string})[], tick?: string|null,
  *   choices: {value: string, label: string, primary?: boolean, write?: boolean, focus?: boolean}[]}} o
  */
 export function askChoice({ title, message, choices, tick = null }) {
   const { dlg, form } = make(title);
   for (const line of [].concat(message)) {
-    const p = document.createElement("p");
-    p.textContent = line;
+    // { pre: text }: a long Now → After table, in aligned columns, scrolling so the buttons stay within reach.
+    const p = document.createElement(line?.pre ? "pre" : "p");
+    p.textContent = line?.pre ?? line;
     form.append(p);
   }
   let box = null;

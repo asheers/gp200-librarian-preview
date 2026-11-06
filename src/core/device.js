@@ -3,8 +3,9 @@
 // Transport-agnostic: `input` needs an `onmidimessage` property and `output`
 // a `send(Uint8Array)` method -- real Web MIDI ports in the browser, or the
 // fake pedal in tests and demo mode. The output is ALWAYS wrapped in the
-// Phase 2 write guard here (write-guard.js), whatever it is given: reads of
-// any slot, but uploads and preset changes only to the scratch bank 60.
+// write guard here (write-guard.js), whatever it is given: reads of any slot,
+// but uploads and preset changes only inside a permitted write, for the slots
+// of the operation the user confirmed (any of the 256 since 0.6.0).
 //
 // Active slot (Phase 3 S0): recorded, never inferred. It is "unknown" at
 // connect (the identity reply carries no slot). It becomes known when this
@@ -214,7 +215,7 @@ export class GP200 {
     return { ok: true, decoded, chunks, ms };
   }
 
-  // ---- write primitives (scratch bank only: the guard refuses anything else) ----
+  // ---- write primitives (permitted slots only: the guard refuses anything else) ----
 
   /** Send "enter editor mode" once per connection, then pause. */
   async enterEditorMode() {
@@ -245,7 +246,7 @@ export class GP200 {
   /**
    * Upload one 1184-byte image (built by copy.js) to `slot` with the CLI's
    * pacing: park on slot^1 (writing the active slot may be a no-op; slot^1
-   * stays in the same bank, so a scratch slot parks on a scratch slot),
+   * stays in the same bank),
    * upload, settle, preset change to `slot`. No verification here.
    * Needs the active permit covering `slot` (guard, D-P1). A guard or device
    * refusal (WriteGuardViolation, WriteRefused) means no upload was sent; any

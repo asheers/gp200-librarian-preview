@@ -137,7 +137,7 @@ export function attachMouseDrag(target, slot, { drop, canDrag = () => true, hove
   target.addEventListener("pointerdown", (e) => {
     target.dragged = false; // a drag released outside the window leaves no click to clear it
     if (e.pointerType !== "mouse" || e.button !== 0 || e.ctrlKey || e.shiftKey || e.metaKey || e.altKey) return;
-    if (e.target.closest?.("button") || !canDrag()) return;
+    if (e.target.closest?.("button") || !canDrag(slot)) return;
     start = { x: e.clientX, y: e.clientY, id: e.pointerId, moving: false };
   });
   target.addEventListener("pointermove", (e) => {
@@ -166,7 +166,7 @@ export function attachMouseDrag(target, slot, { drop, canDrag = () => true, hove
   });
   target.addEventListener("pointercancel", end);
   // The grab cursor shows only where a drag can start now (mouse, demo pedal, connected, idle).
-  target.addEventListener("pointerover", (e) => target.classList.toggle("grab", e.pointerType === "mouse" && canDrag()));
+  target.addEventListener("pointerover", (e) => target.classList.toggle("grab", e.pointerType === "mouse" && canDrag(slot)));
 }
 
 function el(doc, tag, cls, text) {
@@ -186,7 +186,7 @@ function el(doc, tag, cls, text) {
  * @param {(slot: number) => void} [o.onLongPress] a touch long press (enters select mode)
  * @param {(slot: number) => void} [o.onDup] the DUP badge: show that slot's duplicate group
  * @param {(from: number, to: number) => void} [o.onDrop] V5 Lite: a mouse drag of one tile onto another
- * @param {() => boolean} [o.canDrag] V5 Lite: whether a drag may start now
+ * @param {(slot: number) => boolean} [o.canDrag] V5 Lite: whether a drag of this tile may start now
  * @param {(from: number, to: number) => {ok: boolean}} [o.dropInfo] V5 Lite: may this tile take that drop
  * @param {() => {top: number, bottom: number}} [o.dragEdges] 0.9.1: the visible band for auto-scroll
  */

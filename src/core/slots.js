@@ -54,3 +54,14 @@ export function labelToSlot(label) {
 }
 
 export const ALL_SLOTS = Object.freeze(Array.from({ length: TOTAL_SLOTS }, (_, i) => i));
+
+/**
+ * Slots as short text (0.12.0): "36-A" alone, "36-A…36-C" when they run on without a gap, otherwise the
+ * slots themselves ("2-A, 2-C, 36-D"), so a scattered selection never reads as a continuous range.
+ */
+export function slotSpan(slots) {
+  const labels = slots.map(slotToDisplayLabel);
+  if (slots.length < 2) return labels.join("");
+  if (slots.every((s, i) => i === 0 || s === slots[i - 1] + 1)) return `${labels[0]}…${labels.at(-1)}`;
+  return labels.length <= 4 ? labels.join(", ") : `${labels.slice(0, 3).join(", ")} … ${labels.at(-1)}`;
+}

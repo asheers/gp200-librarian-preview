@@ -151,7 +151,10 @@ pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--font-m
 .only-matching { font-size: 13.5px; color: var(--muted); }
 .only-matching[hidden] { display: none; }
 #btn-select-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.selbar { margin: 0 20px 8px; border: 1px solid var(--accent); border-radius: 9px; background: var(--accent-soft); }
+/* 0.12.0: stays in view while selecting across banks (opaque, because the banks scroll under it). */
+.selbar { margin: 0 20px 8px; border: 1px solid var(--accent); border-radius: 9px;
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel);
+  position: sticky; top: var(--tabs-h, 56px); z-index: 14; }
 .selbar[hidden] { display: none; }
 .selinfo { font-weight: 700; }
 .hint { color: var(--muted); font-size: 12.5px; }
@@ -186,7 +189,7 @@ body.panel-undocked .lib.map-off { grid-template-columns: minmax(0, 1fr); }
 .lib-banks { min-width: 0; }
 
 .bank-map {
-  min-width: 0; position: sticky; top: 64px; max-height: calc(100vh - 72px); overflow: auto;
+  min-width: 0; position: sticky; top: var(--sticky-top, 64px); max-height: calc(100vh - var(--sticky-top, 64px) - 8px); overflow: auto;
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
 }
 .bank-map[hidden] { display: none; }
@@ -310,7 +313,9 @@ body.panel-undocked .lib.map-off { grid-template-columns: minmax(0, 1fr); }
 #log .expandable { cursor: pointer; text-decoration: underline dotted; }
 dialog { border: 1px solid var(--line-strong); border-radius: 14px; background: var(--panel); color: var(--text); width: min(820px, 94vw); }
 dialog::backdrop { background: rgba(5, 6, 8, 0.72); }
-.dlg h2 { margin-top: 0; font: 700 25px/1.1 var(--font-display); letter-spacing: 0.3px; }
+/* 0.12.0: a long preview scrolls to its buttons; its headline stays in view. */
+.dlg h2 { margin-top: 0; font: 700 25px/1.1 var(--font-display); letter-spacing: 0.3px; position: sticky; top: 0; z-index: 1; padding: 4px 0; background: var(--panel); }
+.dlg pre { max-height: 30vh; }
 .dlg label { display: block; margin: 8px 0; }
 .dlg-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .credits { padding: 6px 20px 24px; color: var(--muted); font-size: 12.5px; }
@@ -461,7 +466,7 @@ body.view-backup .map-cell.has-sel { border-color: var(--bk); }
 
 /* UI-2: sticky tabs (Stop A finding A1), the status line's Details, the Problem marker,
    file drop, and Select only on touch screens (U10). */
-html { scroll-padding-top: 64px; }
+html { scroll-padding-top: var(--sticky-top, 64px); }
 .place-tabs { position: sticky; top: 0; z-index: 15; }
 .nav-right { display: flex; align-items: center; gap: 8px; }
 .problem { color: var(--err); border-color: var(--err); font-weight: 700; }
@@ -469,7 +474,7 @@ html { scroll-padding-top: 64px; }
 .status-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .status-line .status { flex: 0 1 auto; }
 #btn-status-details[hidden], #btn-goto[hidden] { display: none; }
-.lib .summary { top: 64px; max-height: calc(100vh - 72px); }
+.lib .summary { top: var(--sticky-top, 64px); max-height: calc(100vh - var(--sticky-top, 64px) - 8px); }
 .backups-empty #btn-compare-files { margin-top: 6px; }
 body.dropping::after {
   content: "Drop a backup, .prst or template file"; position: fixed; inset: 8px; z-index: 50; pointer-events: none;
@@ -604,7 +609,7 @@ body.panel-undocked .summary { bottom: calc(var(--strip-h) + env(safe-area-inset
 .pick-slot .ps-label { font: 700 15px/1 var(--font-display); letter-spacing: 0.6px; color: var(--muted); }
 .pick-slot .ps-name { font-weight: 700; overflow-wrap: anywhere; }
 .pick-slot .ps-why { font-size: 12.5px; line-height: 1.3; color: var(--muted); }
-/* occupied: solid tile, bold name. unused: dashed, italic "Unused". protected: hatched, lock, "Protected". */
+/* occupied: solid tile, bold name. unused: dashed, italic "Unused". verification-locked: hatched, lock, "Locked". */
 .pick-slot.unused { background: transparent; border-style: dashed; }
 .pick-slot.unused .ps-name, .pick-slot.unread .ps-name { font-weight: 400; font-style: italic; color: var(--muted); }
 .pick-slot.locked { background: repeating-linear-gradient(135deg, var(--wr-bg) 0 8px, var(--panel) 8px 16px); border-color: var(--wr-line); opacity: 1; color: var(--text); cursor: not-allowed; }

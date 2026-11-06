@@ -1,6 +1,6 @@
 // Web MIDI access: the only module that calls navigator.requestMIDIAccess.
 // It hands out the GP-200's input and a GUARDED output (write-guard.js: reads
-// anywhere, writes only to the scratch bank 60-A..60-D);
+// anywhere, writes only to the slots of a confirmed operation, any of the 256);
 // the raw MIDIOutput port never leaves this module.
 //
 // SysEx access needs a secure context (https:// or http://localhost) and the
@@ -45,7 +45,7 @@ export async function openGp200(log) {
   }
   await input.open?.();
   await rawOutput.open?.();
-  log.info(`Using input "${input.name}" and output "${rawOutput.name}" (output guarded: writes only to scratch bank 60)`);
+  log.info(`Using input "${input.name}" and output "${rawOutput.name}" (output guarded: writes only to the slots of a confirmed operation, any of the 256)`);
   const output = guardedOutput(rawOutput, { onRefused: (e) => log.error(e.message) });
   return { input, output, inputName: input.name, outputName: rawOutput.name, access, allPorts };
 }

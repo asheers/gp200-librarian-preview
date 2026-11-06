@@ -10,9 +10,11 @@
 //     how short names are padded, whether full 16-byte names have a terminator;
 //   - the pedal's own name editor (checked by hand by the user, no MIDI): at
 //     most 16 characters; A-Z, a-z, 0-9, space and keyboard-style punctuation
-//     and symbols; a full 16-character name is entered and displayed.
-// Which byte the pedal stores for each symbol is NOT assumed: only byte values
-// actually seen in dumps are treated as demonstrated.
+//     and symbols; a full 16-character name is entered and displayed;
+//   - symbols typed in that editor, saved and read back (2026-11-05): every
+//     printable ASCII character the editor offers, stored as its ASCII code. It
+//     does not offer "$" (RESEARCH.md §14).
+// A byte value counts as demonstrated only if it was seen in a dump.
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
@@ -27,23 +29,16 @@ export function nameField(dump) {
   return dump.subarray(D, D + NAME_LEN);
 }
 
-// ---- Rename (S3.3): restricted to the byte values RESEARCH.md §14 / this
-// file's own scan actually demonstrates in dumps (its first listed option,
-// since the pedal editor's other symbols are not established). Every value
-// below is also its own ASCII code point, so a character and its byte are
-// the same thing here; "6" (0x36) and "q" (0x71) are deliberately absent.
-// Mirrors tests/fixtures/name-facts.json "demonstratedByteValues".
-export const DEMONSTRATED_NAME_BYTES = Object.freeze([
-  0x20, 0x27, 0x28, 0x29, 0x2b, 0x2d, 0x2e,
-  0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x37, 0x38, 0x39,
-  0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d,
-  0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a,
-  0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d,
-  0x6e, 0x6f, 0x70, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a,
-]);
+// ---- Rename (S3.3): restricted to the byte values demonstrated in dumps (RESEARCH.md §14):
+// printable ASCII, 0x20-0x7E, except "$" (0x24), which the pedal's own editor does not offer.
+// Each value is its own ASCII code, so a character and its byte are the same thing here.
+// tests/names.test.js checks this list against the evidence in tests/fixtures/name-facts.json.
+export const DEMONSTRATED_NAME_BYTES = Object.freeze(
+  Array.from({ length: 0x7f - 0x20 }, (_, i) => 0x20 + i).filter((b) => b !== 0x24),
+);
 export const NAME_ALLOWED_CHARS = new Set(DEMONSTRATED_NAME_BYTES.map((b) => String.fromCharCode(b)));
 /** For messages: what a rename accepts. */
-export const NAME_ALLOWED_DESCRIPTION = "space, digits except 6, A-Z, a-z except q, and ' ( ) + - .";
+export const NAME_ALLOWED_DESCRIPTION = "A-Z, a-z, 0-9, space and keyboard symbols except $";
 
 export class NameError extends Error {
   /** @param {string} code @param {string} message */
@@ -54,6 +49,12 @@ export class NameError extends Error {
   }
 }
 
+/** A name for display: curly outer quotes when it holds a straight one (no patch name can hold a curly one). */
+export function quoteName(name) {
+  const s = `${name}`;
+  return s.includes('"') ? `“${s}”` : `"${s}"`;
+}
+
 /** Throws NameError; otherwise returns `text` unchanged. */
 export function validateName(text) {
   if (typeof text !== "string" || text.length === 0) throw new NameError("empty", "the name is empty");
@@ -62,8 +63,8 @@ export function validateName(text) {
   if (text !== text.trim()) throw new NameError("edge-space", "the name starts or ends with a space; remove it");
   const bad = [...new Set([...text].filter((ch) => !NAME_ALLOWED_CHARS.has(ch)))];
   if (bad.length) {
-    throw new NameError("bad-char", `"${bad.join("")}" ${bad.length === 1 ? "is" : "are"} not a character the pedal has been shown ` +
-      `to store in a name (allowed: ${NAME_ALLOWED_DESCRIPTION})`);
+    throw new NameError("bad-char", `"${bad.join("")}" ${bad.length === 1 ? "is not a character" : "are not characters"} ` +
+      `the Librarian can put in a patch name (allowed: ${NAME_ALLOWED_DESCRIPTION})`);
   }
   return text;
 }

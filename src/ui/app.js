@@ -1,9 +1,8 @@
 // GP200 Librarian UI. Three places (UI-1): Pedal | Templates | Backups, each
 // showing only its own actions (src/core/places.js).
 // Phase 3 S1: the bank-card librarian view (read side);
-// Phase 2 (kept, in "Test tools (bank 60)", More ▾ since UI-4): read everything; copy one patch into the
-// scratch bank 60 (60-A..60-D) with confirmation, before-image, read-back
-// verification and Undo.
+// Phase 2's Test tools (kept, under More ▾ since UI-4) still copy one patch into bank 60 only, with
+// confirmation, before-image, read-back verification and Undo. Everything else below can write any slot.
 // Connect -> read all 256 slots -> show them by bank -> select -> back up,
 // or copy, move or swap a patch. The device's output is wrapped in the write
 // guard (src/core/write-guard.js): no code here can write a slot outside the
@@ -29,12 +28,12 @@ import { interpretQuery, stepMatch } from "../core/search.js";
 import { fileDestination, moreItems, placeOf, regionVisible, tabOf } from "../core/places.js";
 import { Logger, LogView } from "../core/log.js";
 import { normalizedKey } from "../core/match.js";
-import { NAME_ALLOWED_DESCRIPTION, NAME_LEN, validateName } from "../core/names.js";
+import { NAME_ALLOWED_DESCRIPTION, NAME_LEN, quoteName, validateName } from "../core/names.js";
 import { displayName, exportFileName, exportPrst, irNamDependencies, isPrst } from "../core/patch.js";
 import { openGp200, webMidiAvailable } from "../core/midi.js";
-import { Selection } from "../core/selection.js";
+import { assessSources, Selection, skippedNote } from "../core/selection.js";
 import { skeletonBytes } from "../core/skeleton.js";
-import { bankSlots, labelToSlot, slotToDisplayLabel } from "../core/slots.js";
+import { bankSlots, labelToSlot, slotSpan, slotToDisplayLabel } from "../core/slots.js";
 import { sha256Hex } from "../core/sha256.js";
 import { patchSummary } from "../core/summary.js";
 import {
@@ -49,7 +48,7 @@ import { DB_VERSION, inspectDb, librarianStores, readStorageSnapshot, setStorage
 import { checkUnfinished, formatRecoverySummary, writeClearance } from "../core/operations.js";
 import { buildRecoveryPlan, checkOperation, OUTCOMES, RecoveryError, RECOVERY_WRITES, resolveOperation, runRecovery } from "../core/recovery.js";
 import { buildUndoPlan, checkUndo, findUndoable, runUndo, UndoError } from "../core/undo.js";
-import { realPedalAllows, realPedalSourceOk, realPedalUndoable } from "../core/real-pedal.js";
+import { realPedalAllows, realPedalSourcesOk, realPedalUndoable } from "../core/real-pedal.js";
 import { LOCK_NAMES, OWNERSHIP_TEXT, OwnershipError, PedalOwnership, requestWakeLock } from "../core/ownership.js";
 import { storageCopyZip, upgradeNotice } from "../core/storage-upgrade.js";
 import { askChoice, askDestination, askText, showInfo } from "./dialogs.js";
@@ -318,16 +317,35 @@ function renderSelection() {
   if (n === 1) text = `Selected: ${slotToDisplayLabel(list[0])}`;
   else if (n > 1 && n <= 6) text = `${n} selected: ${list.map(slotToDisplayLabel).join(", ")}`;
   else if (n > 6) text = `${n} selected (${slotToDisplayLabel(list[0])} … ${slotToDisplayLabel(list[n - 1])})`;
+  // 0.12.0: what a Copy or Move would do with this selection, said before it is asked for.
+  if (n > 1 && ui.mode === "live") {
+    const a = selectionAssessment();
+    if (a.problem) text += ` · ${a.problem}`;
+    else if (a.skipped.length) text += ` · ${a.skipped.length} unused, will be skipped`;
+  }
   $("selinfo").textContent = ui.selectMode ? `Select mode: tap patches to add or remove them. ${text}.` : text;
   $("selbar").hidden = n === 0 && !ui.selectMode;
   $("btn-clear-sel").disabled = n === 0;
+  // 0.12.0: the sticky map and panel sit below the sticky tabs and selection bar.
+  const tabsH = $("place-tabs").offsetHeight;
+  document.documentElement.style.setProperty("--tabs-h", `${tabsH}px`);
+  document.documentElement.style.setProperty("--sticky-top", `${Math.max(64, tabsH + ($("selbar").hidden ? 0 : $("selbar").offsetHeight + 8))}px`);
   updateButtons();
 }
 
+/** A bank card is on screen (not hidden by "matching banks only" or a backup's "only the differences"). */
+const slotVisible = (slot) => !grid.cards[Math.floor(slot / 4) + 1].classList.contains("nomatch");
+
+/** Is this slot protected from writes, by slot or by its content in the latest read? */
+const isProtected = (slot) => writeRefused(slot, latest()?.dumps[slot] ?? null);
+
+/** 0.12.0: the selection as the sources of a Copy or Move, from the latest read (the plan re-checks from fresh reads). */
+const selectionAssessment = () => assessSources(selection.list(), { unused: (s) => !!ui.view?.slots?.[s]?.unused, isProtected });
+
 function onTile(slot, e) {
   if (ui.selectMode) selection.toggle(slot);
-  else if (e.type === "keydown") selection.click(slot, { ctrl: true, shift: e.shiftKey });
-  else selection.click(slot, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
+  else if (e.type === "keydown") selection.click(slot, { ctrl: true, shift: e.shiftKey, visible: slotVisible });
+  else selection.click(slot, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, visible: slotVisible });
   ui.focus = slot;
   renderGrid();
   // A plain click or tap shows the summary (docked on wide screens, a drawer or sheet otherwise);
@@ -363,7 +381,7 @@ const WIDE = window.matchMedia("(min-width: 1280px)");
 const docked = () => WIDE.matches && !ui.panelHidden;
 /** V3: the empty patch panel says what it is for. */
 const PANEL_EMPTY = ["Click a patch to see it here, with Copy, Move and Swap.",
-  "Ctrl-click or Shift-click to select several: the selection bar backs them up."];
+  "Ctrl-click or Shift-click to select several: the selection bar copies, moves or backs them up."];
 
 function renderSummaryPanel() {
   const slot = ui.summarySlot;
@@ -376,7 +394,7 @@ function renderSummaryPanel() {
       if (m.length) s.matchText = `Same patch also: ${m.join("; ")}.`;
     }
     if (s?.read) s.exactHint = exactHint(slot);
-    renderSummary($("summary-body"), s, actionsFor("patch", { read: slot !== null && ui.view.slots[slot].read, connected: state.connected, unused: slot !== null && ui.view.slots[slot].unused, demo: DEMO, slot }),
+    renderSummary($("summary-body"), s, actionsFor("patch", { read: slot !== null && ui.view.slots[slot].read, connected: state.connected, unused: slot !== null && ui.view.slots[slot].unused, demo: DEMO, slot, several: selection.size > 1 }),
       (id) => doAction(id, "patch", slot), onGroup, { empty: PANEL_EMPTY, kinds: slot === null ? [] : [...new Set(ui.view.slots[slot].irNam.map((d) => d.kind))] });
   }
   $("summary").classList.toggle("open", ui.summaryOpen && slot !== null);
@@ -447,7 +465,7 @@ function onMenu(kind, id, anchor) {
   if (kind === "patch") {
     const s = ui.view.slots[id];
     openMenu(anchor, `${s.label}${s.read ? ` · ${s.unused ? "unused" : s.name || "(no name)"}` : ""}`,
-      actionsFor("patch", { read: s.read, connected: state.connected, unused: s.unused, demo: DEMO, slot: id }), (a) => doAction(a, "patch", id));
+      actionsFor("patch", { read: s.read, connected: state.connected, unused: s.unused, demo: DEMO, slot: id, several: selection.size > 1 }), (a) => doAction(a, "patch", id));
   } else {
     const b = ui.view.banks[id - 1];
     openMenu(anchor, `Bank ${id}`, actionsFor("bank", { anyRead: b.anyRead, connected: state.connected, demo: DEMO, bank: id, writableBanks: WRITABLE_BANKS }),
@@ -635,12 +653,17 @@ function updateButtons() {
   $("btn-backup").disabled = state.busy || !snap || !isComplete(snap);
   $("btn-backup-sel").disabled = state.busy || !snap || selection.size === 0;
   $("btn-backup-sel").textContent = backupSelectedLabel(selection.list()); // B2: "Back up 36-A (exact)…"
-  // S3.2: Copy / Move / Swap the selected patches; demo pedal only, live pedal only.
-  for (const b of ["btn-sel-copy", "btn-sel-move", "btn-sel-swap"]) {
-    $(b).disabled = !DEMO || ui.mode !== "live" || state.busy || !state.connected || selection.size === 0;
-    $(b).title = !DEMO ? "Demo mode only, for now" : "";
-    $(b).hidden = selection.size < 2; // V4 Option A: one patch's actions are in the patch panel; the bar keeps Back up and Clear
+  // S3.2: Copy / Move / Swap the selected patches, live pedal only. 0.12.0: Copy and Move on the real pedal too; Swap is demo-only.
+  const canAct = ui.mode === "live" && !state.busy && state.connected && selection.size > 0;
+  const problem = canAct ? selectionAssessment().problem : null;
+  for (const b of ["btn-sel-copy", "btn-sel-move"]) {
+    $(b).disabled = !canAct || !!problem;
+    $(b).title = problem ?? "";
   }
+  $("btn-sel-swap").disabled = !DEMO || !canAct;
+  $("btn-sel-swap").title = !DEMO ? "Demo mode only, for now" : "";
+  // V4 Option A: one patch's actions are in the patch panel; the bar keeps Back up and Clear
+  for (const b of ["btn-sel-copy", "btn-sel-move", "btn-sel-swap"]) $(b).hidden = selection.size < 2;
   $("btn-cancel").hidden = !state.busy;
   // S3.1 slice 6: Check and recover reads the pedal, so it needs the connection (and is idle-only).
   $("btn-recovery-check").disabled = state.busy || !state.connected;
@@ -2381,9 +2404,9 @@ function showHelp() {
       { heading: "Dropping a file", lines: ["Drop a backup or .prst file onto the window to open it in Backups, or a template file to import it in Templates. Nothing is written to the pedal."] },
       { heading: "Undo", lines: ["After a change to the pedal -- a Test-tools copy, or a Copy, Move, Swap, Rename or Clear from a menu -- an Undo button " +
         "appears on the Pedal tab, saying what it undoes. Only the most recent change can be undone, and only while nothing else has " +
-        "touched its slots since.", "On your GP-200 (not the demo), Copy, Move and Swap work on one patch at a time, between any slots, " +
+        "touched its slots since.", "On your GP-200 (not the demo), Copy, Move and Swap of one patch work between any slots, " +
         "Rename changes one patch's name in its own slot, Clear… puts the built-in default back in one slot, and a bank's menu copies, moves or swaps all four of its slots. " +
-        "Several selected patches are demo mode only, for now."] },
+        "Copy to… and Move to… in the selection bar take up to 16 selected patches, from any banks, to consecutive slots, in bank and slot order; unused slots are skipped. Swap of several patches is demo mode only, for now."] },
       { heading: "More ▾", lines: ["Less common things: read the pedal again, compare two backup files, the log, and what's coming.",
         "Backup folder…, on the Pedal tab: choose a folder where each change's before-image file is saved automatically, without a save dialog.",
         "Test tools (bank 60), on the Pedal tab: a temporary development tool that copies one patch into bank 60 to check writing to the pedal."] },
@@ -2400,7 +2423,7 @@ function init() {
   grid = createBankGrid({ low: $("banks-low"), high: $("banks-high"), onTile, onBankCheck, onMenu, onLongPress, onDup,
     onDrop, canDrag, dropInfo: (from, to) => ({ ok: Array.isArray(dropChoices(from, to)) }),
     // 0.9.1: auto-scroll edges: the band between the sticky tabs bar and the fixed status strip (tiles under them are hidden)
-    dragEdges: () => ({ top: Math.max(0, $("place-tabs").getBoundingClientRect().bottom),
+    dragEdges: () => ({ top: Math.max(0, $("place-tabs").getBoundingClientRect().bottom, $("selbar").hidden ? 0 : $("selbar").getBoundingClientRect().bottom),
       bottom: Math.min(window.innerHeight, $("status-strip").getBoundingClientRect().top) }) });
   bankMap = createBankMap({ root: $("map-grid"), onBank: goToBank });
   $("btn-map").addEventListener("click", () => setLayout("mapShown", !ui.mapShown));
@@ -2460,8 +2483,8 @@ function init() {
   initDrop();
   $("btn-backup-sel").addEventListener("click", () => (ui.mode === "backup" ? extractFromBackup(selection.list()) : backup(selection.list())));
   $("btn-clear-sel").addEventListener("click", () => { selection.clear(); renderGrid(); });
-  $("btn-sel-copy").addEventListener("click", () => startOperation("copy-to", selection.list()));
-  $("btn-sel-move").addEventListener("click", () => startOperation("move-to", selection.list()));
+  $("btn-sel-copy").addEventListener("click", () => startSelectionOperation("copy-to"));
+  $("btn-sel-move").addEventListener("click", () => startSelectionOperation("move-to"));
   $("btn-sel-swap").addEventListener("click", () => startOperation("swap-with", selection.list()));
   $("search").addEventListener("input", applySearch);
   $("search").addEventListener("keydown", (e) => {
@@ -2520,7 +2543,7 @@ function init() {
       if (ui.selectMode) setSelectMode(false);
       else renderGrid();
     }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); selection.selectAll(); renderGrid(); }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); selection.selectAll(slotVisible); renderGrid(); }
   });
   updateButtons();
   if (DEMO) void demoScript(new URLSearchParams(location.search));
@@ -2601,25 +2624,28 @@ async function demoOperation(spec) {
 /**
  * S3.2: Copy to… / Move to… / Swap with… for one patch (its menu) or the selected patches (the
  * selection bar: to consecutive slots from the chosen one). The destination is chosen in a
- * dialog that shows, as you type, what is there now. DEMO PEDAL ONLY: the real pedal waits for
- * its own hardware-approved gate (the controls are disabled there too).
+ * dialog that shows, as you type, what is there now. 0.12.0: Copy and Move of up to 16 on the real
+ * pedal too; `skipped` names the unused slots a selection left out.
  */
-async function startOperation(id, sources, to = null) {
-  if (!DEMO && (sources.length !== 1 || !realPedalSourceOk(id, sources[0]))) { // 0.6.0: one patch, any slot
-    setStatus("On your GP-200, Copy, Move and Swap work on one patch at a time; several patches are demo mode only, for now.", "err");
+async function startOperation(id, sources, to = null, { skipped = [] } = {}) {
+  if (!DEMO && !realPedalSourcesOk(id, sources)) {
+    setStatus("On your GP-200, Copy and Move take up to 16 patches, and Swap one patch at a time; Swap of several is demo mode only, for now.", "err");
     return;
   }
   if (state.busy || !state.device || !state.connected || !sources.length) return;
   const kind = { "copy-to": "copy", "move-to": "move", "swap-with": "swap" }[id];
   const verb = kind[0].toUpperCase() + kind.slice(1);
-  const what = sources.length === 1 ? slotToDisplayLabel(sources[0]) : `${sources.length} patches (${slotRange(sources)})`;
+  const what = sources.length === 1 ? slotToDisplayLabel(sources[0]) : `${sources.length} patches (${slotSpan(sources)})`;
   // V5 Lite: a drop already names the destination; it goes through the same validation as a typed one.
   const dropped = to === null ? null : describeDestination(kind, sources, slotToDisplayLabel(to));
   if (dropped && !dropped.ok) { setStatus(`${verb} ${what} to ${slotToDisplayLabel(to)}: ${dropped.text} Nothing was written.`, "err"); return; }
   const typed = dropped ? slotToDisplayLabel(to) : await askDestination({
     title: `${verb} ${what} ${kind === "swap" ? "with…" : "to…"}`,
-    hint: (sources.length > 1 ? "Type the first slot; the others follow in order. " : "") +
-      (kind === "swap" ? "The patches change places." : kind === "move" ? "The selected slots will be empty afterwards." : "The selected slots are not changed."),
+    hint: (sources.length > 1 ? "Pick or type the first slot; the others follow in bank and slot order. " : "") +
+      (kind === "swap" ? "The patches change places."
+        : kind !== "move" ? "The selected slots are not changed."
+          : sources.length > 1 ? "The selected slots are left empty, except any that receive a moved patch." : "The selected slots will be empty afterwards.") +
+      (skipped.length ? ` ${skippedNote(skipped)}` : ""),
     describe: (text) => describeDestination(kind, sources, text),
     ok: "Continue",
     picker: destinationPicker("slot", sources.length),
@@ -2627,12 +2653,21 @@ async function startOperation(id, sources, to = null) {
   if (typed === null) return;
   const start = labelToSlot(typed);
   // The plan and its preview re-check everything.
-  await runOperation(kind === "swap" ? { kind: "swap", a: sources, b: start } : { kind, from: sources, to: start });
+  await runOperation(kind === "swap" ? { kind: "swap", a: sources, b: start } : { kind, from: sources, to: start }, { skipped });
+}
+
+/** 0.12.0: Copy to… / Move to… in the selection bar. The whole operation is refused if the selection cannot go. */
+function startSelectionOperation(id) {
+  const { sources, skipped, problem } = selectionAssessment();
+  if (problem) { setStatus(`${problem} Nothing was written.`, "err"); return; }
+  return startOperation(id, sources, null, { skipped });
 }
 
 /** V5 Lite: a mouse drag may start only on the live pedal, connected and idle. Real pedal since 0.9.0 (dropChoices,
- *  startOperation and runOperation apply the real-pedal policy). */
-const canDrag = () => ui.mode === "live" && state.connected && !!state.device && !state.busy;
+ *  startOperation and runOperation apply the real-pedal policy). 0.12.0: a drag moves one patch, so a patch that
+ *  belongs to a multi-selection cannot start one (it would look as if the whole selection were moving). */
+const canDrag = (slot) => ui.mode === "live" && state.connected && !!state.device && !state.busy &&
+  !(selection.size > 1 && selection.has(slot));
 
 /**
  * V5 Lite: what the drop chooser offers for one patch dropped on another (docs/PHASE3_S3_BRIEF.md §3.2), or the
@@ -2663,7 +2698,7 @@ function dropChoices(from, to) {
 
 /** V5 Lite: a patch dropped on another opens the chooser. The drop itself never writes; a choice runs startOperation. */
 async function onDrop(from, to) {
-  if (!canDrag()) return;
+  if (!canDrag(from)) return;
   const choices = dropChoices(from, to);
   const name = (s) => { const v = ui.view.slots[s]; return `${v.label}${v.unused ? " (unused)" : ` "${v.name || "(no name)"}"`}`; };
   log.info(`Drag: ${slotToDisplayLabel(from)} dropped on ${slotToDisplayLabel(to)}`);
@@ -2687,7 +2722,7 @@ async function startRename(slot) {
   const typed = await askDestination({
     title: `Rename ${slotToDisplayLabel(slot)}…`,
     field: "New name", placeholder: "e.g. Lead Tone",
-    hint: `Up to ${NAME_LEN} characters: ${NAME_ALLOWED_DESCRIPTION}. Current name: "${current}".`,
+    hint: `Up to ${NAME_LEN} characters: ${NAME_ALLOWED_DESCRIPTION}. Current name: ${quoteName(current)}.`,
     describe: (text) => describeRename(current, text),
     ok: "Continue",
   });
@@ -2774,9 +2809,6 @@ function describeBankDestination(kind, fromBank, text) {
   return { ok, text: `Now: ${slotsNow(bankSlots(to))}.${why}` };
 }
 
-const slotRange = (slots) => (slots.length === 1 ? slotToDisplayLabel(slots[0])
-  : `${slotToDisplayLabel(slots[0])}…${slotToDisplayLabel(slots[slots.length - 1])}`);
-
 /**
  * What the destination selector says about a typed first slot: usable or not, and what the
  * destination slots hold now (latest read). The plan re-checks everything from fresh reads.
@@ -2789,6 +2821,9 @@ function describeDestination(kind, sources, text) {
   if (dests.at(-1) > 255) return { ok: false, text: `${sources.length} patches starting at ${slotToDisplayLabel(start)} would run past 64-D.` };
   if (dests.every((d, i) => d === sources[i])) return { ok: false, text: "That is the same slot." };
   if (kind === "swap" && dests.some((d) => sources.includes(d))) return { ok: false, text: "Swap slots must be outside the selection." };
+  // 0.12.0: any protected slot refuses the whole operation, named here rather than after the reads.
+  const barred = [...new Set([...sources, ...dests])].filter(isProtected).sort((a, b) => a - b).map(slotToDisplayLabel);
+  if (barred.length) return { ok: false, short: `Involves ${barred.join(", ")}`, text: `${barred.join(", ")} ${barred.length === 1 ? "is" : "are"} locked for verification safety, so nothing can be written here. Choose another slot.` };
   const ok = dests.every(isWritableSlot);
   return { ok, text: `Now: ${slotsNow(dests)}.${ok ? "" : " Not writable."}` };
 }
@@ -2802,15 +2837,16 @@ const slotsNow = (slots) => slots.map((d) => {
 /**
  * One operation through the S3.1 engine: write clearance, fresh reads, plan, Now → After
  * preview, confirmation (and the tick box if a real patch is replaced), the before-image file
- * confirmed on disk, then the executor with every gate. Demo pedal only (S3.2).
+ * confirmed on disk, then the executor with every gate. On the real pedal, what real-pedal.js allows.
  * `op` is the planner's operation: {kind: "copy"|"move", from, to}, {kind: "swap", a, b}, or
  * {kind: "bank-copy"|"bank-move"|"bank-swap", fromBank, toBank} (slice 3).
+ * `skipped`: the unused slots a selection left out, named in the preview (0.12.0).
  */
-async function runOperation(op) {
+async function runOperation(op, { skipped = [] } = {}) {
   if (!state.device) return;
   if (!DEMO && !realPedalAllows(op)) { // 0.6.0: one patch, Copy, Move or Swap, between any two slots; 0.8.0: Rename; 0.10.0: banks; 0.11.0: Clear
-    log.warn(`Refused on the real pedal (only one-patch Copy, Move, Swap, Rename and Clear, and bank Copy, Move and Swap are enabled): ${JSON.stringify(op)}`);
-    setStatus("Refused: on your GP-200 only Copy, Move, Swap, Rename and Clear of one patch, and bank Copy, Move and Swap, are enabled. Nothing was written.", "err");
+    log.warn(`Refused on the real pedal (only Copy and Move of up to 16 patches, one-patch Swap, Rename and Clear, and bank Copy, Move and Swap are enabled): ${JSON.stringify(op)}`);
+    setStatus("Refused: on your GP-200 only Copy and Move of up to 16 patches, Swap, Rename and Clear of one patch, and bank Copy, Move and Swap, are enabled. Nothing was written.", "err");
     return;
   }
   const bank = op.kind.startsWith("bank-");
@@ -2820,7 +2856,7 @@ async function runOperation(op) {
   try {
     if (op.kind === "rename") {
       sources = dests = [op.slot];
-      what = `Rename ${slotToDisplayLabel(op.slot)} to "${op.name}"`;
+      what = `Rename ${slotToDisplayLabel(op.slot)} to ${quoteName(op.name)}`;
     } else if (op.kind === "clear") {
       sources = dests = [op.slot];
       what = `Clear ${slotToDisplayLabel(op.slot)}`;
@@ -2828,7 +2864,7 @@ async function runOperation(op) {
       sources = bank ? bankSlots(op.fromBank) : op.kind === "swap" ? op.a : op.from;
       const start = op.kind === "swap" ? op.b : op.to;
       dests = bank ? bankSlots(op.toBank) : sources.map((_, i) => start + i);
-      what = `${kind[0].toUpperCase()}${kind.slice(1)} ` + (bank ? `bank ${op.fromBank} ${arrow} bank ${op.toBank}` : `${slotRange(sources)} ${arrow} ${slotRange(dests)}`);
+      what = `${kind[0].toUpperCase()}${kind.slice(1)} ` + (bank ? `bank ${op.fromBank} ${arrow} bank ${op.toBank}` : `${slotSpan(sources)} ${arrow} ${slotSpan(dests)}`);
     }
   } catch (e) {
     setStatus(`${kind}: ${e.message}`, "err");
@@ -2849,12 +2885,13 @@ async function runOperation(op) {
     }
     plan = buildPlan(op, dumps, { moveClearAllowed: !!latest()?.defaultCheck?.moveClearAllowed, log });
   } catch (e) {
-    setStatus(`${what}: ${e.message}`, "err");
+    const named = e.code === "state-dependent" && e.detail?.slots?.length ? ` Locked: ${e.detail.slots.map(slotToDisplayLabel).join(", ")}. Nothing was written.` : "";
+    setStatus(`${what}: ${e.message}${named}`, "err");
     return;
   }
   const preview = previewPlan(plan);
   // The tick box is IN the preview: its write button stays disabled until ticked (askChoice `tick`).
-  const go = await askChoice({ title: preview.headline, message: formatPreview({ ...preview, tickBox: null }).split("\n").slice(2),
+  const go = await askChoice({ title: preview.headline, message: [...(skipped.length ? [skippedNote(skipped)] : []), ...previewMessage(preview)],
     tick: preview.tickBox,
     choices: [{ value: "go", label: preview.confirmLabel, write: true }, { value: "cancel", label: "Cancel", focus: true }] });
   if (go !== "go") { setStatus(`${what}: cancelled. Nothing was written.`); return; }
@@ -2886,9 +2923,17 @@ async function runOperation(op) {
   await refreshEngineUndo();
 }
 
+/** The preview's lines for the dialog. 0.12.0: past a bank Move's 8 rows the table becomes one scrolling block. */
+function previewMessage(preview) {
+  const lines = formatPreview({ ...preview, tickBox: null }).split("\n").slice(2);
+  if (preview.rows.length <= 8) return lines;
+  const end = lines.indexOf("");
+  return [{ pre: lines.slice(0, end).join("\n") }, ...lines.slice(end + 1)];
+}
+
 /**
  * S3.2 slice 4: single-level Undo of the most recent, successfully completed operation (one
- * patch, several, or a whole bank). DEMO PEDAL ONLY. Fresh read-and-classify of every affected
+ * patch, several, or a whole bank). On the real pedal, what realPedalUndoable allows. Fresh read-and-classify of every affected
  * slot (checkUndo); refused outright, writing nothing, unless every slot is exactly as that
  * operation left it. Then the normal sequence: a Now → After preview (with the tick box if a
  * real patch would be replaced), a fresh before-image file confirmed on disk, and the normal
@@ -2899,7 +2944,7 @@ async function engineUndo() {
   if (state.busy || !state.device || !state.connected || !state.engineUndo) return;
   const record = state.engineUndo;
   if (!DEMO && !realPedalUndoable(record)) { // E1: refreshEngineUndo never offers anything else; checked again here
-    setStatus("Refused: on your GP-200 only the Undo of a one-patch Copy, Move, Swap or Rename is enabled. Nothing was written.", "err");
+    setStatus("Refused: this operation's Undo is not enabled on your GP-200. Nothing was written.", "err");
     return;
   }
   const what = `Undo: ${record.action ?? record.title ?? "last operation"}`;
@@ -2925,7 +2970,7 @@ async function engineUndo() {
   state.busy = false;
   updateButtons();
   const preview = plan.preview;
-  const go = await askChoice({ title: preview.headline, message: formatPreview({ ...preview, tickBox: null }).split("\n").slice(2),
+  const go = await askChoice({ title: preview.headline, message: previewMessage(preview),
     tick: preview.tickBox,
     choices: [{ value: "go", label: preview.confirmLabel, write: true }, { value: "cancel", label: "Cancel", focus: true }] });
   if (go !== "go") { setStatus(`${what}: cancelled. Nothing was written.`); return; }

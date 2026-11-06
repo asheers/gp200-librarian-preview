@@ -22,9 +22,11 @@ const IN_BACKUP = (c) => c.present || "Not in this backup";
 /**
  * S3.2 slice 1: Copy, Move and Swap for one patch at a time. The real pedal
  * may use only the actions in REAL_PEDAL_ACTIONS (0.6.0: Copy, Move and Swap,
- * any slot; 0.8.0: Rename).
+ * any slot; 0.8.0: Rename). 0.12.0: with several patches selected, the selection bar acts on them; a one-patch
+ * action here could be mistaken for it, so it waits.
  */
-const PATCH_WRITE = (id) => (c) => (!c.demo && !REAL_PEDAL_ACTIONS.includes(id) ? "Demo mode only, for now"
+const PATCH_WRITE = (id) => (c) => (c.several ? "Several selected: use the selection bar"
+  : !c.demo && !REAL_PEDAL_ACTIONS.includes(id) ? "Demo mode only, for now"
   : !c.read ? "Not read yet" : c.connected ? true : "Connect first");
 /**
  * S3.2 slice 3: bank Copy, Move and Swap, all four positions; on the real pedal
@@ -89,7 +91,6 @@ export const ACTIONS = Object.freeze([
  * @type {readonly {id: string, label: string, what: string}[]}
  */
 export const PLANNED = Object.freeze([
-  { id: "copy-selection", label: "Copy or move several patches", what: "copy or move several selected patches to consecutive slots, e.g. 36-A…C to 40" },
   { id: "restore", label: "Restore from a backup", what: "put patches from a backup back on the pedal" },
   { id: "template-apply", label: "Apply a template", what: "put a template on the pedal" },
 ].map(Object.freeze));
