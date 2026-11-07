@@ -243,6 +243,11 @@ export class GP200 {
     return this.output.beginPermit(slots);
   }
 
+  /** Start the guard's capture permit for exactly these slots (capture.js); end() revokes it. */
+  beginCapture(slots) {
+    return this.output.beginCapture(slots);
+  }
+
   /**
    * Upload one 1184-byte image (built by copy.js) to `slot` with the CLI's
    * pacing: park on slot^1 (writing the active slot may be a no-op; slot^1

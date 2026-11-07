@@ -47,6 +47,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
+import { OLDER_RECORD_TICK, recordCaptured } from "./capture.js";
 import { buildWriteImage, expectedAfterWrite } from "./copy.js";
 import { classifyDefault } from "./defaults.js";
 import { executePlan } from "./executor.js";
@@ -54,9 +55,8 @@ import { isOperationRecord, operationKey } from "./operations.js";
 import { checkOperation } from "./recovery.js";
 import { quoteName as quoted } from "./names.js";
 import { displayName, irNamDependencies } from "./patch.js";
-import { checkOrdering, OTHER_EDITORS_LINE, SECONDS_PER_WRITE, trackPatches } from "./plan.js";
+import { checkOrdering, OTHER_EDITORS_LINE, SECONDS_PER_WRITE, switchLine, trackPatches } from "./plan.js";
 import { slotToDisplayLabel } from "./slots.js";
-import { evidenceFingerprint, WRITE_REFUSALS } from "./state-evidence.js";
 import { EXPECTED_DUMP_LEN } from "./sysex.js";
 import { WRITABLE_SLOTS } from "./write-guard.js";
 
@@ -118,9 +118,9 @@ export async function checkUndo(device, record, { ownership, log = null, now = (
  * trusting a stale check object.
  * @param {object} record the operation being undone
  * @param {object} check checkUndo(device, record) just now
- * @param {{zone?: readonly number[], register?: readonly object[], now?: () => Date}} [o]
+ * @param {{zone?: readonly number[], now?: () => Date}} [o]
  */
-export function buildUndoPlan(record, check, { zone = WRITABLE_SLOTS, register = WRITE_REFUSALS, now = () => new Date() } = {}) {
+export function buildUndoPlan(record, check, { zone = WRITABLE_SLOTS, now = () => new Date() } = {}) {
   if (check?.overall !== "completed" || check.target !== operationKey(record)) {
     throw new UndoError("no-check", "Check this operation again: Undo is built only from a fresh, passing check.");
   }
@@ -147,11 +147,6 @@ export function buildUndoPlan(record, check, { zone = WRITABLE_SLOTS, register =
     throw new UndoError("not-in-zone", `${outside.map((s) => s.label).join(", ")} ${outside.length === 1 ? "is" : "are"} not writable yet; ` +
       "nothing was written.");
   }
-  const dumps = [...chosen.map((s) => s.content), ...inputs.map((i) => readOf(i.slot)).filter(isDump)];
-  if (dumps.some((d) => register.some((e) => evidenceFingerprint(d, e.fileOff) === e.fingerprint))) {
-    throw new UndoError("state-dependent", "This involves a patch the pedal reports differently depending on the active patch; " +
-      "it cannot be undone yet. Nothing was written.");
-  }
   const inputSlots = inputs.map((i) => i.slot);
   const unusedAt = (s) => classifyDefault(readOf(s), s).unused;
   // Rename changes its own slot's content key (the name is part of it); undoing it is not a
@@ -169,12 +164,12 @@ export function buildUndoPlan(record, check, { zone = WRITABLE_SLOTS, register =
     estimateSeconds: chosen.length * SECONDS_PER_WRITE,
   };
   checkOrdering(plan);
-  plan.preview = previewUndo(plan, action);
+  plan.preview = previewUndo(plan, action, record);
   return plan;
 }
 
 /** The confirmation for an Undo write: every affected slot, now and after, and what is replaced. */
-function previewUndo(plan, action) {
+function previewUndo(plan, action, record) {
   const bySlot = new Map(plan.steps.map((s) => [s.slot, s]));
   const show = (d, slot) => (classifyDefault(d, slot).unused ? "(empty)" : nameOf(d));
   const rows = plan.inputs.map((i) => {
@@ -188,15 +183,16 @@ function previewUndo(plan, action) {
   const lost = plan.replaced.map((s) => `${label(s)} ${quoted(plan.inputs.find((i) => i.slot === s).name)}`);
   return {
     headline: `Undo: ${action}?`, rows, // not quoted: a Rename's action already holds the name in quotes
-    tickBox: !lost.length ? null : lost.length === 1 ? `I understand ${lost[0]} will be replaced.`
+    tickBox: [!lost.length ? null : lost.length === 1 ? `I understand ${lost[0]} will be replaced.`
       : `I understand that ${lost.length} patches will be replaced: ${lost.join(", ")}.`,
+    recordCaptured(record) ? null : OLDER_RECORD_TICK].filter(Boolean).join(" ") || null,
     notes: [
       "The patches from before it are written back, from its saved record.",
       "A backup of these slots as they are now is saved first, and every slot is read back and checked.",
       ...(plan.held.length > 1 ? [`During this, ${plan.held.length} patches are held in the backup until they are written back.`]
         : plan.held.map((h) => `During this, ${quoted(plan.inputs.find((i) => i.slot === h.slot).name)} is held in the backup until it is written back.`)),
       OTHER_EDITORS_LINE,
-      `The pedal will switch to ${plan.steps[plan.steps.length - 1].label} while writing. Save any edits on the pedal first.`,
+      switchLine(plan.steps[plan.steps.length - 1].label),
     ],
     details: [`${plan.steps.length} write${plan.steps.length === 1 ? "" : "s"}, about ${Math.round(plan.estimateSeconds)} s.`,
       ...plan.steps.map((s) => `Step ${s.index + 1}: ${s.why}`)],

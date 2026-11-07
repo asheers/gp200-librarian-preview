@@ -15,7 +15,8 @@
 //   identity query                    any time
 //   read request                      any slot 0-255 (reads change nothing)
 //   enter editor mode                 needed before the pedal accepts uploads
-//   preset change                     only inside a permitted write (below)
+//   preset change                     only inside a permitted write or a
+//                                     capture (below)
 //   flash upload                      only inside a permitted write, and only
 //                                     through sendUpload(): exactly one
 //                                     complete 7-chunk image whose three slot
@@ -47,6 +48,14 @@
 // (D-P1). The permit is revoked by end(), revokePermit() (the device calls it
 // on disconnect), any refused message, an upload that breaks off, or a write
 // ended part-way. Identity, reads and editor mode are unchanged.
+//
+// THE CAPTURE PERMIT (0.13.0, approved by Alan, 2026-11-07; docs/ACTIVE_SLOT_CAPTURE.md).
+//   beginCapture(slots)    after the user confirms a plan: preset changes to
+//                          exactly these slots, so each can be read while it is
+//                          the active patch. Refused while a permit or capture
+//                          is active. No upload can be sent under it, and no
+//                          write can start.
+// It ends with end(), revokePermit() or any refused message.
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
@@ -144,9 +153,11 @@ export function guardedOutput(port, { onRefused = () => {}, onSent = () => {} } 
   let uploading = false;
   let permit = null; // the active permit handle
   let write = null; // the permitted write in progress: {slot, phase: "start" | "parked" | "uploaded" | "selected"}
+  let capture = null; // the active capture permit: {slots: Set<number>}; never alongside a write permit
   const revoke = () => {
     permit = null;
     write = null;
+    capture = null;
   };
   const violation = (what, msg) => {
     const e = new WriteGuardViolation(what, msg);
@@ -165,10 +176,14 @@ export function guardedOutput(port, { onRefused = () => {}, onSent = () => {} } 
     if (!c.kind) refuse(c.reason, msg);
     if (c.kind === "preset-change") {
       const here = slotToDisplayLabel(c.slot);
-      if (!permit || !write) refuse(`a preset change to ${here} with no permitted write in progress`, msg);
-      if (write.phase === "start" && c.slot === (write.slot ^ 1)) write.phase = "parked";
-      else if (write.phase === "uploaded" && c.slot === write.slot) write.phase = "selected";
-      else refuse(`a preset change to ${here} that the permitted write to ${slotToDisplayLabel(write.slot)} does not need now`, msg);
+      if (capture) {
+        if (!capture.slots.has(c.slot)) refuse(`a preset change to ${here}, which this capture does not cover`, msg);
+      } else {
+        if (!permit || !write) refuse(`a preset change to ${here} with no permitted write in progress`, msg);
+        if (write.phase === "start" && c.slot === (write.slot ^ 1)) write.phase = "parked";
+        else if (write.phase === "uploaded" && c.slot === write.slot) write.phase = "selected";
+        else refuse(`a preset change to ${here} that the permitted write to ${slotToDisplayLabel(write.slot)} does not need now`, msg);
+      }
     }
     port.send(msg);
     onSent(c.kind, c.slot);
@@ -216,6 +231,7 @@ export function guardedOutput(port, { onRefused = () => {}, onSent = () => {} } 
     const outside = list.filter((s) => !isWritableSlot(s));
     if (outside.length) throw violation(`a permit for ${outside.map(slotToDisplayLabel).join(", ")}, which is not writable`);
     if (permit) throw violation("a second permit while one is active");
+    if (capture) throw violation("a permit while a capture is active");
     const handle = Object.freeze({
       slots: Object.freeze(list),
       end: () => {
@@ -224,6 +240,22 @@ export function guardedOutput(port, { onRefused = () => {}, onSent = () => {} } 
     });
     permit = handle;
     return handle;
+  };
+  /**
+   * Start a capture of exactly `slots` (each writable). Sends nothing.
+   * @returns {{end: () => void}} ends the capture
+   */
+  const beginCapture = (slots) => {
+    const list = Array.isArray(slots) ? slots : [];
+    if (!list.length || list.some((s) => !isWritableSlot(s))) throw violation(`a capture of ${list.map(slotText).join(", ") || "no slots"}`);
+    if (permit || capture) throw violation("a capture while a permit or capture is active");
+    const mine = { slots: new Set(list) };
+    capture = mine;
+    return Object.freeze({
+      end: () => {
+        if (capture === mine) capture = null;
+      },
+    });
   };
   /** Start one write to `slot` under the active permit `handle`. Sends nothing. */
   const beginWrite = (handle, slot) => {
@@ -238,7 +270,7 @@ export function guardedOutput(port, { onRefused = () => {}, onSent = () => {} } 
     write = null;
   };
   const out = Object.freeze({
-    send, sendUpload, beginPermit, beginWrite, endWrite,
+    send, sendUpload, beginPermit, beginCapture, beginWrite, endWrite,
     revokePermit: revoke,
     hasPermit: () => permit !== null,
     writableSlots: WRITABLE_SLOTS,

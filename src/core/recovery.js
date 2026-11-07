@@ -49,6 +49,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
+import { CaptureError, OLDER_RECORD_TICK, recordCaptured, sameOrClamped } from "./capture.js";
 import { buildWriteImage, expectedAfterWrite } from "./copy.js";
 import { classifyDefault } from "./defaults.js";
 import { executePlan } from "./executor.js";
@@ -56,9 +57,8 @@ import { contentKey } from "./match.js";
 import { operationKey } from "./operations.js";
 import { OwnershipError } from "./ownership.js";
 import { displayName, irNamDependencies } from "./patch.js";
-import { checkOrdering, OTHER_EDITORS_LINE, SECONDS_PER_WRITE, trackPatches } from "./plan.js";
+import { checkOrdering, OTHER_EDITORS_LINE, SECONDS_PER_WRITE, switchLine, trackPatches } from "./plan.js";
 import { slotToDisplayLabel } from "./slots.js";
-import { evidenceFingerprint, WRITE_REFUSALS } from "./state-evidence.js";
 import { EXPECTED_DUMP_LEN } from "./sysex.js";
 import { classifyDumpDiff } from "./volatile.js";
 import { WRITABLE_SLOTS } from "./write-guard.js";
@@ -137,7 +137,29 @@ async function readAll(device, slots, log, logLabel = "Check and recover") {
   return reads;
 }
 
-const same = (a, b) => isDump(a) && isDump(b) && classifyDumpDiff(a, b).contentIdentical;
+// 0.13.0: another patch is active during a check, so a true index may read 0. An older record's own
+// image may hold the clamped 0, so it also allows the reverse.
+const sameFor = (record) => (a, b) => isDump(a) && isDump(b) && sameOrClamped(a, b, { eitherWay: !recordCaptured(record) });
+
+/**
+ * The check, with the capture's true bytes as its reads. Every slot must still be what the
+ * check found, now with no allowance for a clamped read (an older record keeps its own). The
+ * reads of this check's slots are what a plan built from it writes against.
+ */
+export function checkWithCapture(record, check, reads) {
+  const exact = recordCaptured(record) ? (a, b) => isDump(a) && isDump(b) && classifyDumpDiff(a, b).contentIdentical : sameFor(record);
+  const parts = new Map(slotsOf(record).map((p) => [p.slot, p]));
+  for (const s of check.slots) {
+    const p = parts.get(s.slot);
+    const read = reads.get(s.slot);
+    if ((s.found === "original" && !exact(p.before, read)) || (s.found === "intended" && !exact(p.step?.expected, read))) {
+      throw new CaptureError("changed", `${s.label} no longer holds what the check found.`);
+    }
+  }
+  const out = { ...check };
+  Object.defineProperty(out, "reads", { value: reads, enumerable: false });
+  return out;
+}
 
 /**
  * Re-read and classify every slot of an unfinished operation. Reads only.
@@ -146,6 +168,7 @@ const same = (a, b) => isDump(a) && isDump(b) && classifyDumpDiff(a, b).contentI
  * @param {{ownership: import("./ownership.js").PedalOwnership, log?: object, now?: () => Date}} o
  */
 export async function checkOperation(device, record, { ownership, log = null, now = () => new Date(), logLabel = "Check and recover" }) {
+  const same = sameFor(record);
   const parts = slotsOf(record);
   if (!parts.length || !parts.some((p) => p.step)) {
     throw new RecoveryError("damaged", "The record of this operation does not say which slots it wrote, so it cannot be checked. " +
@@ -179,7 +202,9 @@ export async function checkOperation(device, record, { ownership, log = null, no
       detail: other ? `holds the original patch of ${label(other[0])}, which the operation did not plan here` : "holds neither its original nor the planned patch" };
   });
 
-  const heldOnlyInBackup = parts.filter((p) => !p.unused && !keysNow.has(originals.get(p.slot)))
+  // 0.13.0: a read of the patch in any of these slots may be clamped, so its content key alone cannot say it is gone.
+  const foundHere = (p) => [...reads].some(([slot, r]) => r.dump && same(expectedAfterWrite(p.before, slot, r.dump), r.dump));
+  const heldOnlyInBackup = parts.filter((p) => !p.unused && !keysNow.has(originals.get(p.slot)) && !foundHere(p))
     .map((p) => ({ slot: p.slot, label: label(p.slot), name: nameOf(p.before) }));
   const written = slots.filter((s) => s.written);
   const readOnly = slots.filter((s) => !s.written);
@@ -345,10 +370,10 @@ export async function resolveOperation(device, store, record, check, { decision,
  * @param {object} record the unfinished operation (or its legacy view)
  * @param {object} check checkOperation(device, record) just now
  * @param {"put-back"|"finish"} kind
- * @param {{leaveOut?: number[], zone?: readonly number[], register?: readonly object[], now?: () => Date}} [o]
+ * @param {{leaveOut?: number[], zone?: readonly number[], now?: () => Date}} [o]
  *   leaveOut: slots found "unexpected" that put-back should not overwrite
  */
-export function buildRecoveryPlan(record, check, kind, { leaveOut = [], zone = WRITABLE_SLOTS, register = WRITE_REFUSALS, now = () => new Date() } = {}) {
+export function buildRecoveryPlan(record, check, kind, { leaveOut = [], zone = WRITABLE_SLOTS, now = () => new Date() } = {}) {
   if (!RECOVERY_WRITES[kind]) throw new RecoveryError("not-allowed", `unknown recovery "${kind}"`);
   if (!check || check.target !== operationKey(record) || !(check.reads instanceof Map)) {
     throw new RecoveryError("no-check", "Check this operation first: a recovery is built from a fresh check.");
@@ -389,11 +414,6 @@ export function buildRecoveryPlan(record, check, kind, { leaveOut = [], zone = W
     throw new RecoveryError("not-in-zone", `${outside.map((s) => s.label).join(", ")} ${outside.length === 1 ? "is" : "are"} not writable yet; ` +
       "nothing was written.");
   }
-  const dumps = [...steps.map((s) => s.content), ...parts.map((p) => readOf(p.slot))];
-  if (dumps.some((d) => register.some((e) => evidenceFingerprint(d, e.fileOff) === e.fingerprint))) {
-    throw new RecoveryError("state-dependent", "This involves a patch the pedal reports differently depending on the active patch; " +
-      "it cannot be written yet. Nothing was written.");
-  }
   const inputSlots = parts.map((p) => p.slot);
   const unusedAt = (s) => classifyDefault(readOf(s), s).unused;
   // Rename changes its own slot's content key (the name is part of it); recovering it is not a
@@ -412,12 +432,12 @@ export function buildRecoveryPlan(record, check, kind, { leaveOut = [], zone = W
     estimateSeconds: steps.length * SECONDS_PER_WRITE,
   };
   checkOrdering(plan);
-  plan.preview = previewRecovery(plan, check, leaveOut);
+  plan.preview = previewRecovery(plan, check, leaveOut, record);
   return plan;
 }
 
 /** The confirmation for a recovery write: every slot, now and after, and what is replaced. */
-function previewRecovery(plan, check, leaveOut) {
+function previewRecovery(plan, check, leaveOut, record) {
   const found = new Map(check.slots.map((s) => [s.slot, s]));
   const bySlot = new Map(plan.steps.map((s) => [s.slot, s]));
   const show = (d, slot) => (classifyDefault(d, slot).unused ? "(empty)" : nameOf(d));
@@ -439,12 +459,13 @@ function previewRecovery(plan, check, leaveOut) {
     "A backup of these slots as they are now is saved first, and every slot is read back and checked.",
     ...plan.held.map((h) => `During this, "${plan.inputs.find((i) => i.slot === h.slot).name}" is held in the backup until it is written back.`),
     OTHER_EDITORS_LINE,
-    `The pedal will switch to ${plan.steps[plan.steps.length - 1].label} while writing. Save any edits on the pedal first.`,
+    switchLine(plan.steps[plan.steps.length - 1].label),
   ];
   return {
     headline, rows, notes,
-    tickBox: !lost.length ? null : lost.length === 1 ? `I understand ${lost[0]} will be replaced.`
+    tickBox: [!lost.length ? null : lost.length === 1 ? `I understand ${lost[0]} will be replaced.`
       : `I understand that ${lost.length} patches will be replaced: ${lost.join(", ")}.`,
+    recordCaptured(record) ? null : OLDER_RECORD_TICK].filter(Boolean).join(" ") || null,
     details: [`${plan.steps.length} write${plan.steps.length === 1 ? "" : "s"}, about ${Math.round(plan.estimateSeconds)} s.`,
       ...plan.steps.map((s) => `Step ${s.index + 1}: ${s.why}`)],
     swapInstead: false,

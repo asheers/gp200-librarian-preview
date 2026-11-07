@@ -105,10 +105,9 @@ export function askText({ title, label, value = "", max = 64, hint = "", ok = "S
 /**
  * V4: the visual destination picker (docs/REDESIGN_V4_SCOPE.md). It only ever FILLS the dialog's field (`fill`), so a
  * picked destination is validated exactly like a typed one (`describe`) and nothing after Continue changes. A slot the
- * validation refuses is greyed out with the validation's own words; a protected slot (`locked`, from the existing
- * refusal list) shows a lock and `lockText` and cannot be picked; the planner still makes the real refusal.
- * @param {{mode: "slot"|"bank", count?: number, lockText: string,
- *   slots: (bank: number) => {slot: number, label: string, kind: "real"|"unused"|"unread", name: string, locked: boolean}[],
+ * validation refuses is greyed out with the validation's own words.
+ * @param {{mode: "slot"|"bank", count?: number,
+ *   slots: (bank: number) => {slot: number, label: string, kind: "real"|"unused"|"unread", name: string}[],
  *   parse: (text: string) => {bank: number, slot: number|null}|null}} p
  * @param {(text: string) => {ok: boolean, text: string}} describe the dialog's own validation
  * @param {(text: string) => void} fill puts a label into the field and re-validates
@@ -123,10 +122,8 @@ function buildPicker(p, describe, fill) {
   banks.setAttribute("aria-label", "Banks");
   const slotsEl = document.createElement("div");
   slotsEl.className = "pick-slots";
-  const note = document.createElement("p");
-  note.className = "hint pick-note";
   el.append(banks);
-  if (p.mode === "slot") el.append(slotsEl, note);
+  if (p.mode === "slot") el.append(slotsEl);
   const span = (cls, text) => { const s = document.createElement("span"); s.className = cls; s.textContent = text; return s; };
   let bank = null;
   let picked = new Set();
@@ -138,10 +135,9 @@ function buildPicker(p, describe, fill) {
     btn.className = "pick-bank";
     btn.dataset.bank = b;
     const pips = span("pips", "");
-    for (const s of info) pips.append(Object.assign(document.createElement("i"), { className: s.locked ? "locked" : s.kind }));
+    for (const s of info) pips.append(Object.assign(document.createElement("i"), { className: s.kind }));
     btn.append(span("pb-no", String(b)), pips);
-    if (info.some((s) => s.locked)) btn.append(span("pb-lock", "🔒"));
-    btn.setAttribute("aria-label", `Bank ${b}: ${info.map((s) => `${s.label} ${s.locked ? "locked for verification safety" : s.kind === "unused" ? "unused" : s.kind === "unread" ? "not read" : s.name}`).join(", ")}`);
+    btn.setAttribute("aria-label", `Bank ${b}: ${info.map((s) => `${s.label} ${s.kind === "unused" ? "unused" : s.kind === "unread" ? "not read" : s.name}`).join(", ")}`);
     if (p.mode === "bank") {
       const r = describe(String(b));
       btn.disabled = !r.ok;
@@ -165,14 +161,13 @@ function buildPicker(p, describe, fill) {
       const r = describe(s.label);
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = `pick-slot ${s.kind}${s.locked ? " locked" : ""}${picked.has(s.slot) ? " picked" : ""}`;
+      btn.className = `pick-slot ${s.kind}${picked.has(s.slot) ? " picked" : ""}`;
       btn.dataset.slot = s.slot;
       btn.append(span("ps-label", s.label), span("ps-name", s.kind === "unused" ? "Unused" : s.kind === "unread" ? "Not read yet" : s.name));
-      if (s.locked) btn.append(span("ps-why", "🔒 Locked"));
-      else if (!r.ok) btn.append(span("ps-why", r.short ?? r.text));
-      btn.disabled = s.locked || !r.ok;
-      btn.title = s.locked ? p.lockText : r.ok ? "" : r.text;
-      btn.setAttribute("aria-label", `${s.label}: ${btn.querySelector(".ps-name").textContent}${s.locked ? ". Locked: " + p.lockText : r.ok ? "" : `. ${r.text}`}`);
+      if (!r.ok) btn.append(span("ps-why", r.short ?? r.text));
+      btn.disabled = !r.ok;
+      btn.title = r.ok ? "" : r.text;
+      btn.setAttribute("aria-label", `${s.label}: ${btn.querySelector(".ps-name").textContent}${r.ok ? "" : `. ${r.text}`}`);
       btn.addEventListener("click", () => fill(s.label));
       slotsEl.append(btn);
     }
@@ -186,11 +181,7 @@ function buildPicker(p, describe, fill) {
       if (r.slot !== null) for (let i = 0; i < count && r.slot + i < 256; i++) picked.add(r.slot + i); // past 64-D: the validation says so
     }
     markBanks();
-    if (p.mode === "slot") {
-      renderSlots();
-      const lockedPick = r?.slot !== null && r && [...picked].some((s) => p.slots(Math.floor(s / 4) + 1)[s % 4]?.locked);
-      note.textContent = lockedPick ? `🔒 Locked: ${p.lockText}` : "";
-    }
+    if (p.mode === "slot") renderSlots();
   }
   return { el, follow };
 }
@@ -245,8 +236,11 @@ export function askChoice({ title, message, choices, tick = null }) {
   const { dlg, form } = make(title);
   for (const line of [].concat(message)) {
     // { pre: text }: a long Now → After table, in aligned columns, scrolling so the buttons stay within reach.
+    // { destination: text }, { warning: text }: 0.13.0, the two lines of a write preview that must stand out.
     const p = document.createElement(line?.pre ? "pre" : "p");
-    p.textContent = line?.pre ?? line;
+    p.textContent = line?.pre ?? line?.destination ?? line?.warning ?? line;
+    if (line?.destination) p.className = "dlg-destination";
+    if (line?.warning) p.className = "dlg-warning";
     form.append(p);
   }
   let box = null;

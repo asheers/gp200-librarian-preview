@@ -15,8 +15,8 @@ import { compareBackups, formatCompareReport, loadBackup } from "../core/compare
 import { CopyError, describePlan, executeWrite, prepareCopy, prepareUndo } from "../core/copy.js";
 import { journalZip, planJournalZip } from "../core/journal.js";
 import { confirmPlan, executePlan } from "../core/executor.js";
-import { buildPlan, formatPreview, previewPlan, STATE_REFUSAL } from "../core/plan.js";
-import { writeRefused } from "../core/state-evidence.js"; // V4: the picker's lock (read only; the planner still refuses)
+import { captureForPlan } from "../core/capture.js";
+import { buildPlan, formatPreview, previewPlan, UNSAVED_EDITS_WARNING } from "../core/plan.js";
 import { GP200 } from "../core/device.js";
 import { actionsFor, PLANNED } from "../core/actions.js";
 import { openSource, prstForSlot } from "../core/backup-source.js";
@@ -46,7 +46,7 @@ import { isWritableSlot, SCRATCH_SLOTS, WRITABLE_SLOTS } from "../core/write-gua
 import { APP_NAME, APP_VERSION, BUILD } from "../version.js";
 import { DB_VERSION, inspectDb, librarianStores, readStorageSnapshot, setStorageGate } from "./store-idb.js";
 import { checkUnfinished, formatRecoverySummary, writeClearance } from "../core/operations.js";
-import { buildRecoveryPlan, checkOperation, OUTCOMES, RecoveryError, RECOVERY_WRITES, resolveOperation, runRecovery } from "../core/recovery.js";
+import { buildRecoveryPlan, checkOperation, checkWithCapture, OUTCOMES, RecoveryError, RECOVERY_WRITES, resolveOperation, runRecovery } from "../core/recovery.js";
 import { buildUndoPlan, checkUndo, findUndoable, runUndo, UndoError } from "../core/undo.js";
 import { realPedalAllows, realPedalSourcesOk, realPedalUndoable } from "../core/real-pedal.js";
 import { LOCK_NAMES, OWNERSHIP_TEXT, OwnershipError, PedalOwnership, requestWakeLock } from "../core/ownership.js";
@@ -59,7 +59,7 @@ import { applyLogUpdate, toggleLogLine } from "./log-panel.js";
 import { openMenu } from "./menus.js";
 import { renderSummary } from "./summary-panel.js";
 import { describeSave, saveFile } from "./save-file.js";
-import { describeFolderSave, FOLDER_DIALOG_ID, FOLDER_KEY, folderPermission, renewPermission, saveToFolder } from "./backup-folder.js";
+import { beforeImageDestination, describeFolderSave, FOLDER_DIALOG_ID, FOLDER_KEY, folderPermission, renewPermission, saveToFolder } from "./backup-folder.js";
 import { beforeImageVerified } from "../core/before-image-gate.js";
 import { integrityOf, integrityOk, verifyFollowUps } from "../core/read-integrity.js";
 import { buildDemoEvidence, classifyHistoryEntry, historyForFullBackup } from "../core/history.js";
@@ -336,11 +336,9 @@ function renderSelection() {
 /** A bank card is on screen (not hidden by "matching banks only" or a backup's "only the differences"). */
 const slotVisible = (slot) => !grid.cards[Math.floor(slot / 4) + 1].classList.contains("nomatch");
 
-/** Is this slot protected from writes, by slot or by its content in the latest read? */
-const isProtected = (slot) => writeRefused(slot, latest()?.dumps[slot] ?? null);
 
 /** 0.12.0: the selection as the sources of a Copy or Move, from the latest read (the plan re-checks from fresh reads). */
-const selectionAssessment = () => assessSources(selection.list(), { unused: (s) => !!ui.view?.slots?.[s]?.unused, isProtected });
+const selectionAssessment = () => assessSources(selection.list(), { unused: (s) => !!ui.view?.slots?.[s]?.unused });
 
 function onTile(slot, e) {
   if (ui.selectMode) selection.toggle(slot);
@@ -2062,10 +2060,12 @@ async function recoveryWrite(record, check, kind) {
   }
   const preview = previewPlan(plan);
   // The tick box is IN the preview: its write button stays disabled until ticked (askChoice `tick`).
-  const go = await askChoice({ title: preview.headline, message: formatPreview({ ...preview, tickBox: null }).split("\n").slice(2),
+  const go = await askChoice({ title: preview.headline, message: await writeMessage(preview),
     tick: preview.tickBox,
     choices: [{ value: "go", label: preview.confirmLabel, write: true }, { value: "cancel", label: "Cancel", focus: true }] });
   if (go !== "go") { setStatus(`${what}: cancelled. Nothing was written.`); return; }
+  plan = await captureConfirmed(what, plan, (reads) => buildRecoveryPlan(record, checkWithCapture(record, check, reads), kind, { leaveOut }));
+  if (!plan) return;
   const confirmation = confirmPlan(plan, { confirmed: true, tickBoxAccepted: !!preview.tickBox });
   // A fresh before-image of these slots AS THEY ARE NOW, confirmed on disk. Fails closed.
   const z = planJournalZip(plan, { skeleton, title: what });
@@ -2679,8 +2679,6 @@ function dropChoices(from, to) {
   const [a, b] = [ui.view?.slots?.[from], ui.view?.slots?.[to]];
   if (from === to || !a || !b) return "That is the same slot.";
   if (!a.read || !b.read) return "Read the pedal first: both slots must have been read.";
-  const snap = latest();
-  if (writeRefused(from, snap?.dumps[from] ?? null) || writeRefused(to, snap?.dumps[to] ?? null)) return STATE_REFUSAL;
   if (a.unused && b.unused) return "Both slots are unused: there is nothing to do.";
   const ok = new Set(actionsFor("patch", { read: true, connected: state.connected, demo: DEMO, slot: from })
     .filter((x) => x.enabled).map((x) => x.id));
@@ -2772,16 +2770,15 @@ async function startBankOperation(id, fromBank) {
 
 /**
  * V4: what the visual picker shows, from the latest read. It only fills the destination field; the field's own
- * validation and the plan decide. Protected = the existing write-refusal list (by slot or by content), shown with a lock.
+ * validation and the plan decide.
  */
 function destinationPicker(mode, count = 1) {
-  const snap = latest();
   return {
-    mode, count, lockText: STATE_REFUSAL,
+    mode, count,
     slots: (bank) => bankSlots(bank).map((slot) => {
       const v = ui.view.slots[slot];
       return { slot, label: slotToDisplayLabel(slot), kind: !v?.read ? "unread" : v.unused ? "unused" : "real",
-        name: v?.name || "(no name)", locked: writeRefused(slot, snap?.dumps[slot] ?? null) };
+        name: v?.name || "(no name)" };
     }),
     parse: (text) => {
       if (mode === "bank") { const b = parseBank(text); return b === null ? null : { bank: b, slot: null }; }
@@ -2821,9 +2818,6 @@ function describeDestination(kind, sources, text) {
   if (dests.at(-1) > 255) return { ok: false, text: `${sources.length} patches starting at ${slotToDisplayLabel(start)} would run past 64-D.` };
   if (dests.every((d, i) => d === sources[i])) return { ok: false, text: "That is the same slot." };
   if (kind === "swap" && dests.some((d) => sources.includes(d))) return { ok: false, text: "Swap slots must be outside the selection." };
-  // 0.12.0: any protected slot refuses the whole operation, named here rather than after the reads.
-  const barred = [...new Set([...sources, ...dests])].filter(isProtected).sort((a, b) => a - b).map(slotToDisplayLabel);
-  if (barred.length) return { ok: false, short: `Involves ${barred.join(", ")}`, text: `${barred.join(", ")} ${barred.length === 1 ? "is" : "are"} locked for verification safety, so nothing can be written here. Choose another slot.` };
   const ok = dests.every(isWritableSlot);
   return { ok, text: `Now: ${slotsNow(dests)}.${ok ? "" : " Not writable."}` };
 }
@@ -2885,16 +2879,17 @@ async function runOperation(op, { skipped = [] } = {}) {
     }
     plan = buildPlan(op, dumps, { moveClearAllowed: !!latest()?.defaultCheck?.moveClearAllowed, log });
   } catch (e) {
-    const named = e.code === "state-dependent" && e.detail?.slots?.length ? ` Locked: ${e.detail.slots.map(slotToDisplayLabel).join(", ")}. Nothing was written.` : "";
-    setStatus(`${what}: ${e.message}${named}`, "err");
+    setStatus(`${what}: ${e.message}`, "err");
     return;
   }
   const preview = previewPlan(plan);
   // The tick box is IN the preview: its write button stays disabled until ticked (askChoice `tick`).
-  const go = await askChoice({ title: preview.headline, message: [...(skipped.length ? [skippedNote(skipped)] : []), ...previewMessage(preview)],
+  const go = await askChoice({ title: preview.headline, message: [...(skipped.length ? [skippedNote(skipped)] : []), ...await writeMessage(preview)],
     tick: preview.tickBox,
     choices: [{ value: "go", label: preview.confirmLabel, write: true }, { value: "cancel", label: "Cancel", focus: true }] });
   if (go !== "go") { setStatus(`${what}: cancelled. Nothing was written.`); return; }
+  plan = await captureConfirmed(what, plan, (reads) => buildPlan(op, reads, { moveClearAllowed: !!latest()?.defaultCheck?.moveClearAllowed, log }));
+  if (!plan) return;
   const confirmation = confirmPlan(plan, { confirmed: true, tickBoxAccepted: !!preview.tickBox });
   const z = planJournalZip(plan, { skeleton, title: what });
   const saved = await saveOperationBeforeImage(what, plan, z);
@@ -2921,6 +2916,36 @@ async function runOperation(op, { skipped = [] } = {}) {
   setStatus(result.ok ? `${what}: done and verified.${folderNote(saved)}` : `${what}: ${result.summary}. ${result.stopReason?.message ?? ""}`, result.ok ? "ok" : "err");
   await checkUnfinishedOperations();
   await refreshEngineUndo();
+}
+
+/** 0.13.0: a write preview, ending with where the before-image goes and, standing out, the unsaved-edits warning. */
+async function writeMessage(preview) {
+  const lines = previewMessage(preview);
+  const warns = (l) => typeof l === "string" && l.includes(UNSAVED_EDITS_WARNING);
+  const dir = await backupFolder();
+  return [...lines.filter((l) => !warns(l)),
+    { destination: beforeImageDestination(dir, dir ? await folderPermission(dir) : null) },
+    ...lines.filter(warns).map((warning) => ({ warning }))];
+}
+
+/**
+ * 0.13.0: after the user confirms, read every slot of the plan while it is active and rebuild
+ * the plan from those reads. On any failure: the reason on the status line, and null. No upload
+ * has been sent and no operation record exists at this point.
+ */
+async function captureConfirmed(what, plan, rebuild) {
+  state.busy = true;
+  updateButtons();
+  setStatus(`${what}: reading the slots involved…`);
+  try {
+    return await captureForPlan(state.device, plan, rebuild, { ownership, log });
+  } catch (e) {
+    setStatus(`${what}: ${e.message}`, "err");
+    return null;
+  } finally {
+    state.busy = false;
+    updateButtons();
+  }
 }
 
 /** The preview's lines for the dialog. 0.12.0: past a bank Move's 8 rows the table becomes one scrolling block. */
@@ -2958,8 +2983,9 @@ async function engineUndo() {
   state.busy = true;
   updateButtons();
   let plan;
+  let check;
   try {
-    const check = await checkUndo(state.device, record, { ownership, log });
+    check = await checkUndo(state.device, record, { ownership, log });
     plan = buildUndoPlan(record, check);
   } catch (e) {
     state.busy = false;
@@ -2970,10 +2996,12 @@ async function engineUndo() {
   state.busy = false;
   updateButtons();
   const preview = plan.preview;
-  const go = await askChoice({ title: preview.headline, message: previewMessage(preview),
+  const go = await askChoice({ title: preview.headline, message: await writeMessage(preview),
     tick: preview.tickBox,
     choices: [{ value: "go", label: preview.confirmLabel, write: true }, { value: "cancel", label: "Cancel", focus: true }] });
   if (go !== "go") { setStatus(`${what}: cancelled. Nothing was written.`); return; }
+  plan = await captureConfirmed(what, plan, (reads) => buildUndoPlan(record, checkWithCapture(record, check, reads)));
+  if (!plan) return;
   const confirmation = confirmPlan(plan, { confirmed: true, tickBoxAccepted: !!preview.tickBox });
   const z = planJournalZip(plan, { skeleton, title: what });
   const saved = await saveOperationBeforeImage(what, plan, z);

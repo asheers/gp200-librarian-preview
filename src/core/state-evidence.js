@@ -54,31 +54,6 @@ export const STATE_EVIDENCE = Object.freeze([
 /** Whole-read signatures seen in the 16 complete reads on file. */
 export const OBSERVED_SIGNATURES = Object.freeze(["000000", "222233"]);
 
-/**
- * D1 (approved 2026-11-01): the patches every write refuses. The register above, plus patches later
- * seen to read differently with the active patch: 41-D at 0x3BE (0/3), fingerprinted again after its
- * edit because the dependence survived the edit (CP1, Slice A), and 64-A..64-D at 0x44E (0/5; E1, W2,
- * CP1). Fingerprints from the SA-0, SA-8, W2 and E1 pre-flight backups (identical in all four). Kept
- * apart from the register, so compare classification and signatures do not change. Changing this
- * list is a deliberate, reviewed change; tests/unlock.test.js pins it.
- */
-export const WRITE_REFUSALS = Object.freeze([
-  ...STATE_EVIDENCE,
-  entry("41D", 0x3be, [0, 3], "7a1353d3dad93490955ef93a6b13abd0bda3097bfd8c98c3abd16e7240d5763e"),
-  entry("64A", 0x44e, [0, 5], "da0b39eae313dba78196acac99cb8be5edc897b82db727ba2f0f69e6ef483ebb"),
-  entry("64B", 0x44e, [0, 5], "e7052580a20cc59b7cd2331803645ab1c110e7457485a17d2aed5f11a15c208f"),
-  entry("64C", 0x44e, [0, 5], "ff6a78b59711a2774feb5a4a2b7fdbfc10ce49f6ee3222c2d577977825b8c3e6"),
-  entry("64D", 0x44e, [0, 5], "e1d34a162db92ad41249d35d60eba875173ed37a48789715fbae92077c7f7448"),
-]);
-
-/**
- * Must a write refuse this input? Yes if its slot is a listed slot (so an edit does not lift a refusal
- * unnoticed, as 41-D's edit did) or its content matches a listed fingerprint (wherever it now is).
- */
-export function writeRefused(slot, dump, list = WRITE_REFUSALS) {
-  return list.some((e) => e.slot === slot || (dump instanceof Uint8Array && evidenceFingerprint(dump, e.fileOff) === e.fingerprint));
-}
-
 /** File offsets masked to 0x00 in every fingerprint (besides the entry's own byte). */
 export const FINGERPRINT_MASKED_FILE_OFFSETS = Object.freeze([
   0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, // PC stamp

@@ -5,7 +5,7 @@
 // Rename of one patch in its own slot. 0.10.0 adds bank Copy, Move and Swap
 // (all four positions) and their Undo; 0.11.0 Clear of one patch. 0.12.0 (approved 2026-11-05) adds Copy and Move
 // of up to 16 selected patches, wherever they are, to consecutive slots; Swap of several stays demo-only. This narrows what the app
-// asks for; the planner (zone, write refusals), the write guard and its
+// asks for; the planner (zone), the write guard and its
 // per-operation permit still check on their own. No DOM code.
 //
 // SPDX-License-Identifier: GPL-3.0-only

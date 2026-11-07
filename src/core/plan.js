@@ -36,8 +36,7 @@
 // unknown operation, bad or duplicate slots, same slot, a range past 64-D,
 // any written slot outside the write zone (the whole plan, never partly),
 // a missing or wrong-length read, a read whose slot fields do not carry its
-// own slot number, any input that is a pedal-dependent patch (by slot or by
-// content: WRITE_REFUSALS, D1), moving an unused slot, a swap of identical content,
+// own slot number, moving an unused slot, a swap of identical content,
 // a clear when the default self-check has not allowed it, and nothing to do.
 //
 // The write zone defaults to the guard's static WRITABLE_SLOTS (all 256,
@@ -51,7 +50,6 @@ import { contentKey } from "./match.js";
 import { encodeName, quoteName as quoted, validateName, withName } from "./names.js";
 import { displayName, irNamDependencies } from "./patch.js";
 import { bankSlots, BANKS, slotSpan as range, slotToDisplayLabel, TOTAL_SLOTS } from "./slots.js";
-import { WRITE_REFUSALS, writeRefused } from "./state-evidence.js";
 import { EXPECTED_DUMP_LEN } from "./sysex.js";
 import { classifyDumpDiff } from "./volatile.js";
 import { WRITABLE_SLOTS } from "./write-guard.js";
@@ -68,8 +66,10 @@ export const SAFEGUARD_LINE = "A backup of the changed slots is saved first, and
 /** Decision 5 (2026-10-19): the one-tab lock cannot see other programs, browsers or addresses. */
 export const OTHER_EDITORS_LINE = "Close other MIDI editors (Valeton's editor, GP200 Studio) and any other Librarian window while writing: " +
   "they are not locked out.";
-export const STATE_REFUSAL = "This can't be done yet: this slot or patch is on the app's verification-safety list. Patches on the list " +
-  "read differently depending on which patch is active, so a write could not be verified reliably. The patch itself is not at fault.";
+/** 0.13.0: the app shows the note holding this as a warning block, not a plain line. */
+export const UNSAVED_EDITS_WARNING = "Switching can discard unsaved edits on the pedal, even if you then cancel: save any you want to keep first.";
+/** 0.13.0: what the pedal does after the confirmation (capture.js), then during the writes. */
+export const switchLine = (lastLabel) => `After you confirm, the pedal switches patches to read each slot exactly, and it ends on ${lastLabel}. ${UNSAVED_EDITS_WARNING}`;
 
 export class PlanError extends Error {
   /** @param {string} code @param {string} message @param {object} [detail] */
@@ -230,11 +230,10 @@ function orderSteps(steps, unusedAt) {
  * @param {object} [o]
  * @param {readonly number[]} [o.zone] slots that may be written (default: the guard's static bank-60 zone)
  * @param {boolean} [o.moveClearAllowed] from defaultSelfCheck(); a clear to the default is refused without it
- * @param {readonly object[]} [o.register] the state-evidence register (tests inject their own)
  * @param {{info: Function, debug: Function}} [o.log]
  * @returns {Plan}
  */
-export function buildPlan(op, dumps, { zone = WRITABLE_SLOTS, moveClearAllowed = false, register = WRITE_REFUSALS, log = null, now = () => new Date() } = {}) {
+export function buildPlan(op, dumps, { zone = WRITABLE_SLOTS, moveClearAllowed = false, log = null, now = () => new Date() } = {}) {
   const get = (s) => (dumps instanceof Map ? dumps.get(s) : dumps?.[s]);
   const infoCache = new Map();
   const info = (s) => {
@@ -285,13 +284,6 @@ export function buildPlan(op, dumps, { zone = WRITABLE_SLOTS, moveClearAllowed =
     if (identicalPatch(info(op.a).dump, info(op.b).dump, op.b)) {
       throw new PlanError("nothing-to-do", `${label(op.a)} and ${label(op.b)} hold the same patch; swapping them would change nothing`);
     }
-  }
-
-  const stateHits = inputSlots.filter((s) => writeRefused(s, info(s).dump, register));
-  if (stateHits.length) {
-    throw new PlanError("state-dependent", STATE_REFUSAL, { slots: stateHits, technical:
-      `Refused: ${stateHits.map(label).join(", ")} ${stateHits.length === 1 ? "is" : "are"} on the write-refusal list, by slot or by ` +
-      "content (active-patch-dependent bytes: R1, E1, CP1; D1). Writes involving these patches wait for W3s." });
   }
 
   // Build every step, then drop the ones that change nothing.
@@ -530,7 +522,7 @@ export function previewPlan(plan) {
   notes.push(SAFEGUARD_LINE);
   notes.push(OTHER_EDITORS_LINE);
   const last = plan.steps[plan.steps.length - 1];
-  notes.push(`The pedal will switch to ${last.label} while writing. Save any edits on the pedal first.`);
+  notes.push(switchLine(last.label));
   const deps = [...new Set(plan.steps.flatMap((s) => (s.transform === "identity" ? s.irNam.map((x) => x.text) : [])))];
   if (deps.length) {
     notes.push(`Uses ${deps.join(", ")}: the patch keeps pointing at the same IR / NAM slot on this pedal; that data itself is not copied.`);

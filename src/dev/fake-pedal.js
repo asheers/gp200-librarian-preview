@@ -25,7 +25,12 @@
 //
 // Fault injection for tests: `faults` (read replies), `liveNoise` (tail
 // +6/+7 and dead-byte noise on every read, as seen on hardware), `onStore`
-// (change or drop what an upload stores), `activeSlotWriteIsNoop` (GP200
+// (change or drop what an upload stores), `paramCount` (0.13.0: a read clamps an
+// assignment index the active patch's model does not have, as Stage A showed on
+// hardware), `silentOnSameSlot` (no echo for a change to the active patch),
+// `editBuffer` (unsaved edits on the active patch: they clamp reads, a change to
+// another patch discards them, and with `readsEditBuffer` a read of it returns them),
+// `activeSlotWriteIsNoop` (GP200
 // Studio's unconfirmed report), and `ignoreEditorMode`.
 // Anything it does not understand is recorded in `unexpected`.
 //
@@ -35,6 +40,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
+import { ASSIGNMENT_INDEX_FILE_OFFSETS } from "../core/capture.js";
 import {
   buildEnterEditorMode, buildIdentityQuery, chunkOffset, CMD_RESPONSE, HEADER, isSysex, parseUploadChunks, presetChangeSlot,
   readRequestSlot, sameBytes, SUB_DUMP_CHUNK, SUB_IDENTITY_REPLY, SUB_PRESET_CHANGE, SUB_UPLOAD_CHUNK, UPLOAD_CHUNK_COUNT, UPLOAD_CHUNK_RAW,
@@ -82,9 +88,11 @@ export class FakePedal {
    */
   constructor({
     dumps = new Map(), defaultDump, faults = null, liveNoise = false, onStore = null, activeSlotWriteIsNoop = false,
-    ignoreEditorMode = false, answerIdentity = true, replyDelayMs = 0, echoPresetChanges = true,
+    ignoreEditorMode = false, answerIdentity = true, replyDelayMs = 0, echoPresetChanges = true, paramCount = null, silentOnSameSlot = false,
   } = {}) {
     this.echoPresetChanges = echoPresetChanges;
+    this.paramCount = paramCount; // (activeDump, block) => parameters of the active patch's model in that block
+    this.silentOnSameSlot = silentOnSameSlot;
     this.dumps = dumps;
     this.defaultDump = defaultDump;
     this.faults = faults;
@@ -147,8 +155,10 @@ export class FakePedal {
     const preset = presetChangeSlot(msg);
     if (preset !== null) {
       this.events.push({ kind: "preset-change", slot: preset });
+      const same = this.activeSlot === preset;
+      if (!same) this.editBuffer = null;
       this.activeSlot = preset;
-      if (this.echoPresetChanges) this._emit(Uint8Array.from(msg));
+      if (this.echoPresetChanges && !(same && this.silentOnSameSlot)) this._emit(Uint8Array.from(msg));
       return;
     }
     if (isUploadChunk) {
@@ -162,7 +172,15 @@ export class FakePedal {
   _answerRead(slot) {
     const n = (this.reads.get(slot) ?? 0) + 1;
     this.reads.set(slot, n);
-    let dump = this.dumpOf(slot);
+    let dump = this.editBuffer && this.readsEditBuffer && slot === this.activeSlot ? this.editBuffer : this.dumpOf(slot);
+    if (this.paramCount && this.activeSlot !== null) {
+      const active = this.editBuffer ?? this.dumpOf(this.activeSlot);
+      dump = Uint8Array.from(dump);
+      for (const off of ASSIGNMENT_INDEX_FILE_OFFSETS) {
+        const i = off - 0x28;
+        if (dump[i - 1] <= 10 && dump[i] >= this.paramCount(active, dump[i - 1])) dump[i] = 0;
+      }
+    }
     if (this.noise) {
       dump = Uint8Array.from(dump);
       for (let q = 0; q < 8; q++) {

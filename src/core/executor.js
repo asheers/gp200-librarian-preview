@@ -14,20 +14,23 @@
 //             before anything is sent; updated before and after every step.
 //             A failed save aborts; a failed update stops before the next
 //             write.
-//   re-check  every input is read again; abort if any differs (PATCH CONTENT)
-//             from what the user confirmed against.
+//   capture   the plan comes from capture.js captureForPlan: every input read
+//             while it was the active patch. A plan without it is refused.
+//   re-check  every input is read again; abort if any differs (PATCH CONTENT,
+//             allowing capture.js sameOrClamped) from what the user confirmed against.
 //   steps     in plan order: re-read the slot immediately before writing; it
-//             must still hold what the plan expects (its original); write with
+//             must still hold what the plan expects (its original, same allowance); write with
 //             the CLI pacing (device.writeImage, under the guard's permit for
 //             exactly the plan's slots, ended in `finally`);
 //             read back and verify against `expected` with copy.js's
-//             readBackAndVerify (PATCH CONTENT; on a mismatch 2 confirmation
-//             reads, never a second write).
+//             readBackAndVerify (strict PATCH CONTENT, no allowance; on a mismatch
+//             2 confirmation reads, never a second write).
 //   stop      at the first step that is not verified, at an unexpected state,
 //             at a failed read, or after a preset change the app did not send
 //             (a footswitch). Never retried, never rolled back on its own.
 //   end       when every step verified: re-read every input. Written slots
-//             must still verify; the others must be unchanged.
+//             must still verify; the others must be unchanged (same allowance:
+//             by now another patch is active).
 //
 // Step states: pending -> in-flight -> verified | failed | unknown | refused;
 // steps after a stop stay not-started. The record keeps the before-images
@@ -40,6 +43,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 import { beforeImageVerified } from "./before-image-gate.js";
+import { sameOrClamped } from "./capture.js";
 import { readBackAndVerify } from "./copy.js";
 import { WriteRefused } from "./device.js";
 import { RECORD_VERSION, writeClearance } from "./operations.js";
@@ -168,6 +172,9 @@ async function runPlan(device, plan, { confirmation, beforeImage, journal, log, 
       throw new ExecError("bad-plan", `step ${s.index + 1}'s image is not addressed to ${label(s.slot)}; nothing was written.`);
     }
   }
+  if (plan.activeSlotCapture !== true) {
+    throw new ExecError("not-captured", "this plan was not read with each slot active; nothing was written.");
+  }
   if (!beforeImage || !beforeImageVerified(beforeImage.saved, beforeImage.bytes)) {
     throw new ExecError("before-image-not-saved", "the before-image file was not saved and confirmed on disk; nothing was written.");
   }
@@ -185,6 +192,7 @@ async function runPlan(device, plan, { confirmation, beforeImage, journal, log, 
       kind: "operation", recordVersion: RECORD_VERSION, op: plan.kind, requested: plan.requested, title, action: actionTitle(plan),
       recoveryOf: plan.recoveryOf ?? undefined, // slice 7: the operation this one recovers (put back / finish)
       undoOf: plan.undoOf ?? undefined, // slice 4 (undo.js): the operation this one undoes; excludes it from being undone again (no redo)
+      activeSlotCapture: true, // the before-images are true bytes (capture.js); older records lack this
       createdAt: plan.createdAt, state: "started",
       zone: plan.zone, held: plan.held, replaced: plan.replaced, confirmedAt: confirmation.confirmedAt,
       inputs: plan.inputs.map((i) => ({ slot: i.slot, label: i.label, name: i.name, unused: i.unused, role: i.role, before: i.dumpAtConfirm })),
@@ -240,7 +248,7 @@ async function runPlan(device, plan, { confirmation, beforeImage, journal, log, 
       return finish(stop("recheck-failed", `${inp.label} could not be re-read before writing (${e.message})`));
     }
     const c = classifyDumpDiff(inp.dumpAtConfirm, now);
-    if (!c.contentIdentical) {
+    if (!sameOrClamped(inp.dumpAtConfirm, now)) {
       return finish(stop("input-changed", `${inp.label} changed since you confirmed (${c.content.length} patch-content byte(s) differ)`));
     }
   }
@@ -287,7 +295,7 @@ async function runPlan(device, plan, { confirmation, beforeImage, journal, log, 
         break;
       }
       const pre = classifyDumpDiff(st.expectBefore, current);
-      if (!pre.contentIdentical) {
+      if (!sameOrClamped(st.expectBefore, current)) {
         stopped = stop("unexpected-state", `${s.label} does not hold what the plan expects before step ${s.index + 1} ` +
           `(${pre.content.length} patch-content byte(s) differ)`);
         break;
@@ -342,8 +350,10 @@ async function runPlan(device, plan, { confirmation, beforeImage, journal, log, 
   for (const inp of plan.inputs) {
     const step = plan.steps.find((x) => x.slot === inp.slot);
     try {
-      const c = classifyDumpDiff(step ? step.expected : inp.dumpAtConfirm, await readFull(device, inp.slot));
-      if (!c.contentIdentical) {
+      const expected = step ? step.expected : inp.dumpAtConfirm;
+      const now = await readFull(device, inp.slot);
+      if (!sameOrClamped(expected, now)) {
+        const c = classifyDumpDiff(expected, now);
         endState.problems.push(`${inp.label} ${step ? "no longer verifies" : "CHANGED although the plan did not write it"} ` +
           `(${c.content.length} byte(s))`);
       }

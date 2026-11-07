@@ -14,19 +14,17 @@ const labels = (slots) => slots.map(slotToDisplayLabel).join(", ");
 
 /**
  * What a Copy or Move of the selected slots would use (0.12.0, decisions 2-4). Unused slots are left out;
- * a protected slot among the rest, or too many patches, refuses the whole operation with `problem`.
+ * too many patches refuses the whole operation with `problem`.
  * The planner re-checks everything from fresh reads; this only says so early and by name.
  * @param {number[]} list the selection, in slot order
- * @param {{unused: (slot: number) => boolean, isProtected: (slot: number) => boolean}} o
+ * @param {{unused: (slot: number) => boolean}} o
  * @returns {{sources: number[], skipped: number[], problem: string|null}}
  */
-export function assessSources(list, { unused, isProtected }) {
+export function assessSources(list, { unused }) {
   const skipped = list.filter(unused);
   const sources = list.filter((s) => !unused(s));
-  const barred = sources.filter(isProtected);
   let problem = null;
   if (!sources.length) problem = "Every selected slot is unused: there is nothing to copy or move.";
-  else if (barred.length) problem = `Can't copy or move this selection: ${labels(barred)} ${barred.length === 1 ? "is" : "are"} locked for verification safety (a write can't be verified yet). Ctrl+click to deselect.`;
   else if (sources.length > MAX_SELECTED_PATCHES) problem = `${sources.length} patches selected: at most ${MAX_SELECTED_PATCHES} can be copied or moved at once.`;
   return { sources, skipped, problem };
 }

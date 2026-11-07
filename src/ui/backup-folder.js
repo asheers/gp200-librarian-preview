@@ -40,6 +40,16 @@ export async function renewPermission(dir) {
   }
 }
 
+/**
+ * What the write preview says about the before-image, so the user knows before confirming whether a
+ * Save dialog will come. `dir` is the chosen folder or null; `permission` is folderPermission(dir).
+ */
+export function beforeImageDestination(dir, permission) {
+  if (!dir) return "Before-image: a Save dialog opens after you confirm. Nothing is written until the file is saved.";
+  if (permission === "granted") return `Before-image: saved automatically to the folder ${dir.name}, with no Save dialog. Confirming starts the write.`;
+  return `Before-image: saved to the folder ${dir.name} if the browser allows it; otherwise a Save dialog opens. Nothing is written until the file is saved.`;
+}
+
 async function exists(dir, name) {
   try {
     await dir.getFileHandle(name);

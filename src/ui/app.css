@@ -412,6 +412,9 @@ dialog.dlg-wide { width: min(980px, 96vw); }
 .tpl-details { font-size: 14px; }
 .tpl-d-name { margin: 0 0 6px; font: 700 24px/1.1 var(--font-display); }
 .dlg-tick { display: block; margin: 10px 0 4px; font-weight: 700; }
+.dlg-destination { font-weight: 700; }
+.dlg-warning { padding: 8px 12px; border: 2px solid var(--wr-line); border-radius: 8px; background: var(--wr-bg); color: var(--wr-text); font-weight: 700; }
+.dlg-warning::before { content: "⚠ "; }
 .dlg-input { display: block; width: 100%; margin-top: 4px; font: inherit; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--bg); color: var(--text); }
 
 /* ---- Backup Browser (Phase 3 S2): clearly a backup, not the pedal ---- */
@@ -599,26 +602,20 @@ body.panel-undocked .summary { bottom: calc(var(--strip-h) + env(safe-area-inset
 .pick-banks { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; }
 .pick-bank { position: relative; padding: 4px 0 5px; border-radius: 6px; background: var(--bg); border-color: var(--line); display: grid; gap: 3px; justify-items: center; }
 .pick-bank .pb-no { font: 600 14px/1 var(--font-display); font-variant-numeric: tabular-nums; }
-.pick-bank .pb-lock { position: absolute; top: -5px; right: -3px; font-size: 10px; line-height: 1; }
 .pick-bank[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .pick-bank:disabled { opacity: 0.45; }
-.pips i.locked { box-shadow: inset 0 0 0 1px var(--err); background: repeating-linear-gradient(45deg, var(--err) 0 1px, transparent 1px 3px); }
 .pick-slots { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .pick-empty { grid-column: 1 / -1; }
 .pick-slot { display: grid; align-content: start; gap: 2px; min-width: 0; min-height: 66px; padding: 7px 9px; text-align: left; border-radius: 9px; }
 .pick-slot .ps-label { font: 700 15px/1 var(--font-display); letter-spacing: 0.6px; color: var(--muted); }
 .pick-slot .ps-name { font-weight: 700; overflow-wrap: anywhere; }
 .pick-slot .ps-why { font-size: 12.5px; line-height: 1.3; color: var(--muted); }
-/* occupied: solid tile, bold name. unused: dashed, italic "Unused". verification-locked: hatched, lock, "Locked". */
+/* occupied: solid tile, bold name. unused: dashed, italic "Unused". */
 .pick-slot.unused { background: transparent; border-style: dashed; }
 .pick-slot.unused .ps-name, .pick-slot.unread .ps-name { font-weight: 400; font-style: italic; color: var(--muted); }
-.pick-slot.locked { background: repeating-linear-gradient(135deg, var(--wr-bg) 0 8px, var(--panel) 8px 16px); border-color: var(--wr-line); opacity: 1; color: var(--text); cursor: not-allowed; }
-.pick-slot.locked .ps-why { color: var(--wr-text); font-weight: 700; }
-.pick-slot:disabled:not(.locked) { opacity: 1; border-style: dashed; color: var(--muted); }
+.pick-slot:disabled { opacity: 1; border-style: dashed; color: var(--muted); }
 .pick-slot.picked { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--sel-bg); }
 .pick-slot.picked .ps-label { color: var(--accent); }
-.pick-note:empty { display: none; }
-.pick-note { color: var(--wr-text); font-weight: 700; }
 @media (max-width: 599px) {
   .pick-banks { grid-template-columns: repeat(8, minmax(0, 1fr)); }
   .pick-slots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
